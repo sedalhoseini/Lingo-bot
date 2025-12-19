@@ -79,22 +79,20 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = msg.from_user.id
 
+# ===== FORWARD PRIVATE MESSAGES TO CHANNEL =====
+if msg.chat.type == "private" and not msg.text.startswith("/") and not msg.reply_to_message:
+    try:
+        mention = get_user_mention(user_id, msg.from_user.username)
+        await context.bot.send_message(
+            chat_id=MESSAGES_CHANNEL_ID,
+            text=f"{mention}: \"{msg.text}\"",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
+    
     if user_id in WHITELIST_IDS:
         return
-
-    # ===== MESSAGE LOGGING (GROUP + PRIVATE) =====
-    if (msg.text or msg.caption):
-        if msg.chat.type in ("group", "supergroup") or (
-            msg.chat.type == "private" and not msg.text.startswith("/")
-        ):
-            try:
-                await context.bot.send_message(
-                    chat_id=MESSAGES_CHANNEL_ID,
-                    text=f"{get_user_mention(user_id, msg.from_user.username)}: {msg.text or msg.caption}",
-                    parse_mode="Markdown"
-                )
-            except Exception:
-                pass
 
     # ===== DELETE JOIN / LEAVE MESSAGES =====
     if msg.new_chat_members or msg.left_chat_member:
@@ -236,4 +234,5 @@ Thread(target=lambda: server.run(host="0.0.0.0", port=3000)).start()
 
 print("Punisher bot is running...")
 app.run_polling()
+
 
