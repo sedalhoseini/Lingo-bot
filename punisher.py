@@ -139,6 +139,14 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = msg.from_user.id
     now = int(time.time())
 
+    # ===== DELETE JOIN / LEAVE MESSAGES =====
+    if msg.new_chat_members or msg.left_chat_member:
+        try:
+            await msg.delete()
+        except:
+            pass
+        return
+    
     # ===== FORWARD PRIVATE MESSAGES =====
     if msg.chat.type=="private" and msg.text and not msg.text.startswith("/") and not msg.reply_to_message:
         try:
@@ -252,6 +260,7 @@ app.add_handler(CommandHandler("myid", cmd_myid))
 
 print("Punisher bot is running...")
 app.run_polling()
+
 
 
 
