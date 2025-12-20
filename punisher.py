@@ -330,6 +330,17 @@ async def handle_chat_member_update(update: Update, context: ContextTypes.DEFAUL
 # ===== COMMANDS =====
 @admin_only
 async def list_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    now = int(time.time())
+    
+    # Optional: remove warnings older than X seconds (if you want auto-expire)
+    # For example, expire warnings after 24 hours:
+    EXPIRE_SECONDS = 24 * 3600
+    expired = [uid for uid, data in user_warnings.items() if 'time' in data and now - data['time'] > EXPIRE_SECONDS]
+    for uid in expired:
+        del user_warnings[uid]
+    if expired:
+        save_data(WARNINGS_FILE, user_warnings)
+    
     if not user_warnings:
         await update.message.reply_text("No warnings.")
         return
@@ -348,6 +359,15 @@ async def list_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def list_muted(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    now = int(time.time())
+    
+    # Remove expired mutes automatically
+    expired = [uid for uid, until in muted_users.items() if until <= now]
+    for uid in expired:
+        del muted_users[uid]
+    if expired:
+        save_data(MUTED_FILE, muted_users)
+    
     if not muted_users:
         await update.message.reply_text("No muted users.")
         return
@@ -390,6 +410,7 @@ app.add_handler(CallbackQueryHandler(button_handler))
 
 print("Punisher bot is running...")
 app.run_polling()
+
 
 
 
