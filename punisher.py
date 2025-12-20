@@ -262,21 +262,25 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===== WARN & MUTE =====
 async def warn_user(msg, context):
     uid = msg.from_user.id
-    user_warnings[uid] = user_warnings.get(uid, 0) + 1
-
+    now = int(time.time())
+    
+    # store warning count + timestamp
+    user_warnings[uid] = {
+        'count': user_warnings.get(uid, {'count':0})['count'] + 1,
+        'time': now
+    }
     save_data(WARNINGS_FILE, user_warnings)
     
-    if user_warnings[uid] < WARNING_LIMIT:
+    if user_warnings[uid]['count'] < WARNING_LIMIT:
         try:
             await msg.reply_text(
-                f"Warning {user_warnings[uid]}/{WARNING_LIMIT}. Follow the rules."
+                f"Warning {user_warnings[uid]['count']}/{WARNING_LIMIT}. Follow the rules."
             )
         except Exception:
             pass
     else:
-        until = int(time.time()) + 600
+        until = now + 600  # mute duration
         muted_users[uid] = until
-        
         save_data(MUTED_FILE, muted_users)
         
         try:
@@ -298,8 +302,9 @@ async def warn_user(msg, context):
         except Exception:
             pass
 
-        user_warnings[uid] = 0
-        save_data(WARNINGS_FILE, user_warnings)  # reset warning count
+        # reset warning count
+        user_warnings[uid] = {'count': 0, 'time': now}
+        save_data(WARNINGS_FILE, user_warnings)
 
 # ===== LOGGING =====
 async def log_action(text, channel_id, context):
@@ -331,11 +336,10 @@ async def handle_chat_member_update(update: Update, context: ContextTypes.DEFAUL
 @admin_only
 async def list_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = int(time.time())
+    EXPIRE_SECONDS = 24*3600  # 24 hours expiry
     
-    # Optional: remove warnings older than X seconds (if you want auto-expire)
-    # For example, expire warnings after 24 hours:
-    EXPIRE_SECONDS = 24 * 3600
-    expired = [uid for uid, data in user_warnings.items() if 'time' in data and now - data['time'] > EXPIRE_SECONDS]
+    # Remove expired warnings
+    expired = [uid for uid, data in user_warnings.items() if now - data['time'] > EXPIRE_SECONDS]
     for uid in expired:
         del user_warnings[uid]
     if expired:
@@ -345,7 +349,7 @@ async def list_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No warnings.")
         return
     
-    for uid, cnt in user_warnings.items():
+    for uid, data in user_warnings.items():
         try:
             user = await context.bot.get_chat(uid)
             mention = get_user_mention(user.id, user.username)
@@ -353,7 +357,7 @@ async def list_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
             mention = f"user_{uid}"
         
         await update.message.reply_text(
-            f"{mention}: {cnt}",
+            f"{mention}: {data['count']}",
             reply_markup=build_warning_keyboard(uid)
         )
 
@@ -361,7 +365,7 @@ async def list_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def list_muted(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = int(time.time())
     
-    # Remove expired mutes automatically
+    # Remove expired mutes
     expired = [uid for uid, until in muted_users.items() if until <= now]
     for uid in expired:
         del muted_users[uid]
@@ -410,6 +414,7 @@ app.add_handler(CallbackQueryHandler(button_handler))
 
 print("Punisher bot is running...")
 app.run_polling()
+
 
 
 
