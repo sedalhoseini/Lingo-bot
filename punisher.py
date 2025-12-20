@@ -230,7 +230,7 @@ async def list_muted(update: Update, context):
 # ===== NORMAL USER COMMANDS =====
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        await update.message.reply_text(".درود! به چنل خودتون خوش اومدین")
+        await update.message.reply_text("درود! به چنل خودتون خوش اومدید.")
     except:
         pass
 
@@ -252,5 +252,6 @@ app.add_handler(CommandHandler("myid", cmd_myid))
 
 print("Punisher bot is running...")
 app.run_polling()
+
 
 
