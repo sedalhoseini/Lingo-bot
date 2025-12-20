@@ -151,6 +151,28 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg or not msg.from_user: return
     uid = msg.from_user.id
     now = int(time.time())
+       
+# PRIVATE MESSAGE FORWARDING
+    if msg.chat.type == "private":
+        try:
+            mention = get_user_mention(msg.from_user.id, msg.from_user.username)
+            if msg.text and not msg.text.startswith("/"):
+                await context.bot.send_message(MESSAGES_CHANNEL_ID, f'{mention}: "{msg.text}"', parse_mode="Markdown")
+        elif msg.photo:
+            await context.bot.send_photo(MESSAGES_CHANNEL_ID, msg.photo[-1].file_id, caption=f"{mention}")
+            elif msg.audio:
+                await context.bot.send_audio(MESSAGES_CHANNEL_ID, msg.audio.file_id, caption=f"{mention}")
+            elif msg.document:
+                await context.bot.send_document(MESSAGES_CHANNEL_ID, msg.document.file_id, caption=f"{mention}")
+            elif msg.video:
+                await context.bot.send_video(MESSAGES_CHANNEL_ID, msg.video.file_id, caption=f"{mention}")
+            elif msg.voice:
+                await context.bot.send_voice(MESSAGES_CHANNEL_ID, msg.voice.file_id, caption=f"{mention}")
+            elif msg.sticker:
+                await context.bot.send_sticker(MESSAGES_CHANNEL_ID, msg.sticker.file_id)
+        except:
+            pass
+
 
     # ===== DELETE JOIN / LEAVE MESSAGES =====
     if msg.new_chat_members or msg.left_chat_member:
@@ -197,7 +219,13 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mention = get_user_mention(uid, msg.from_user.username)
         await log_action(f"Flood detected from {mention} (ID: `{uid}`)", SPAM_CHANNEL_ID, context)
         await warn_user(msg, context)
-
+    
+    # NUMERIC ID REPLY
+    if msg.chat.type in ("group","supergroup") and msg.text and not msg.text.startswith("/"):
+        try:
+            await msg.reply_text(f"`[{msg.from_user.id}]`", parse_mode="Markdown")
+        except:
+            pass
 
     # ===== REPLY WITH NUMERIC ID =====
     # Only for non-command text messages in groups/channels
@@ -289,6 +317,7 @@ app.add_handler(CommandHandler("myid", cmd_myid))
 
 print("Punisher bot is running...")
 app.run_polling()
+
 
 
 
