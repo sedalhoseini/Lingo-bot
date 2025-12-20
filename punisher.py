@@ -227,6 +227,19 @@ async def list_muted(update: Update, context):
         until_str = datetime.fromtimestamp(until, tz=TEHRAN).strftime("%Y-%m-%d %H:%M:%S")
         await update.message.reply_text(f"{get_user_mention(uid,None)} until {until_str}", reply_markup=build_muted_keyboard(uid))
 
+# ===== NORMAL USER COMMANDS =====
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.message.reply_text("درود به چنل خودتون خوش اومدین")
+    except:
+        pass
+
+async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.message.reply_text("@SedAl_Hoseini")
+    except:
+        pass
+
 # ===== APP =====
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(ChatMemberHandler(handle_chat_member_update, ChatMemberHandler.CHAT_MEMBER))
@@ -234,6 +247,9 @@ app.add_handler(CommandHandler("warnings", list_warnings))
 app.add_handler(CommandHandler("muted", list_muted))
 app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_messages))
 app.add_handler(CallbackQueryHandler(button_handler))
+app.add_handler(CommandHandler("start", cmd_start))
+app.add_handler(CommandHandler("myid", cmd_myid))
 
 print("Punisher bot is running...")
 app.run_polling()
+
