@@ -174,6 +174,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         until = int(time.time()) + value
         muted_users[user_id] = until
         save_data(MUTED_FILE, muted_users)
+
+        await context.bot.restrict_chat_member(
+            chat_id=query.message.chat.id,
+            user_id=user_id,
+            permissions=ChatPermissions(can_send_messages=False),
+            until_date=until
+        )
+
+        await query.edit_message_text(
+            f"User muted until {format_tehran_time(until)}",
+            reply_markup=build_muted_keyboard(user_id)
+        )
+
+        save_data(MUTED_FILE, muted_users)
         await query.edit_message_text(f"User {user_id} muted for {value//60} minutes")
     
     elif action == "increase":
@@ -380,7 +394,7 @@ async def list_muted(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             chat_member = await context.bot.get_chat_member(update.effective_chat.id, uid)
             # If user is not restricted or restriction expired, remove from memory
-            if chat_member.can_send_messages or until_ts <= now:
+            if until_ts <= now:
                 to_remove.append(uid)
         except Exception:
             # If we can't fetch member (left the chat), remove too
@@ -432,6 +446,7 @@ app.add_handler(CallbackQueryHandler(button_handler))
 
 print("Punisher bot is running...")
 app.run_polling()
+
 
 
 
