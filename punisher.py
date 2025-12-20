@@ -15,7 +15,7 @@ import json
 # ==================== PERSONALIZE THESE ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-ADMIN_USER_IDS = {527164608, 11223344}  # Add your personal ID here
+ADMIN_USER_IDS = {527164608}  # Add your personal ID here
 ADMIN_CHAT_IDS = {1087968824}  # IDs of groups/channels the bot should recognize as admin
 
 MAX_MESSAGES_PER_MINUTE = 5
@@ -316,4 +316,5 @@ app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_messages))
 
 print("Punisher bot is running...")
 app.run_polling()
+
 
