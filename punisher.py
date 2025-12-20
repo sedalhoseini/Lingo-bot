@@ -153,13 +153,14 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = int(time.time())
        
 # PRIVATE MESSAGE FORWARDING
-    if msg.chat.type == "private":
+    if msg.chat.type == "private" and msg.from_user:
         try:
             mention = get_user_mention(msg.from_user.id, msg.from_user.username)
+
             if msg.text and not msg.text.startswith("/"):
                 await context.bot.send_message(MESSAGES_CHANNEL_ID, f'{mention}: "{msg.text}"', parse_mode="Markdown")
-        elif msg.photo:
-            await context.bot.send_photo(MESSAGES_CHANNEL_ID, msg.photo[-1].file_id, caption=f"{mention}")
+            elif msg.photo:
+                await context.bot.send_photo(MESSAGES_CHANNEL_ID, msg.photo[-1].file_id, caption=f"{mention}")
             elif msg.audio:
                 await context.bot.send_audio(MESSAGES_CHANNEL_ID, msg.audio.file_id, caption=f"{mention}")
             elif msg.document:
@@ -170,8 +171,9 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_voice(MESSAGES_CHANNEL_ID, msg.voice.file_id, caption=f"{mention}")
             elif msg.sticker:
                 await context.bot.send_sticker(MESSAGES_CHANNEL_ID, msg.sticker.file_id)
-        except:
-            pass
+
+        except Exception as e:
+            print(f"Forwarding error: {e}")
 
 
     # ===== DELETE JOIN / LEAVE MESSAGES =====
@@ -317,6 +319,7 @@ app.add_handler(CommandHandler("myid", cmd_myid))
 
 print("Punisher bot is running...")
 app.run_polling()
+
 
 
 
