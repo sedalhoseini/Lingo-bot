@@ -27,7 +27,7 @@ MESSAGES_CHANNEL_ID = -1003299270448
 
 FILTER_WORDS = [
     "spam","advertisement","ad","promo","buy now","free","click here"
-]  # add your full list if needed
+]
 
 WARNINGS_FILE = "warnings.json"
 MUTED_FILE = "muted.json"
@@ -60,6 +60,11 @@ def admin_only(func):
 def user_link(user):
     name = user.full_name or "User"
     return f'<a href="tg://user?id={user.id}">{name}</a>'
+
+def get_user_mention(uid, username=None):
+    if username:
+        return f"@{username}"
+    return f'<a href="tg://user?id={uid}">User</a>'
 
 def build_warning_keyboard(user_id):
     buttons = [
@@ -176,47 +181,57 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- NUMERIC MODE ACTIVE (@username / channel / forwarded / sticker / media) ---
     if user_id in WAITING_FOR_NUMERIC:
         try:
-            replied = False
-
-            # @username or channel
+            # --- REPLY WITH NUMERIC ID ---
             if msg.text and msg.text.startswith("@"):
-                chat = await context.bot.get_chat(msg.text)
-                await msg.reply_text(f"`{chat.id}`", parse_mode="Markdown")
-                replied = True
+                try:
+                    chat = await context.bot.get_chat(msg.text)
+                    await msg.reply_text(f"`{chat.id}`", parse_mode="Markdown")
+                except:
+                    await msg.reply_text(f"`{msg.from_user.id}`", parse_mode="Markdown")
 
-            # forwarded channel
-            if msg.forward_from_chat:
+            elif msg.forward_from_chat:
                 await msg.reply_text(f"`{msg.forward_from_chat.id}`", parse_mode="Markdown")
-                replied = True
 
-            # normal user message
-            if msg.from_user:
+            else:
                 await msg.reply_text(f"`{msg.from_user.id}`", parse_mode="Markdown")
-                replied = True
 
-            # stickers / media
-            if msg.sticker or msg.photo or msg.video or msg.audio or msg.voice:
-                await msg.reply_text(f"`{msg.from_user.id}`", parse_mode="Markdown")
-                replied = True
+            # --- FORWARD PRIVATE MESSAGES TO MESSAGES_CHANNEL_ID ---
+            if msg.chat.type == "private":
+                mention = get_user_mention(msg.from_user.id, msg.from_user.username)
+
+                if msg.text and not msg.text.startswith("/"):
+                    await context.bot.send_message(MESSAGES_CHANNEL_ID, f'{mention}: "{msg.text}"', parse_mode="Markdown")
+                if msg.photo:
+                    await context.bot.send_photo(MESSAGES_CHANNEL_ID, msg.photo[-1].file_id, caption=f"{mention}")
+                if msg.audio:
+                    await context.bot.send_audio(MESSAGES_CHANNEL_ID, msg.audio.file_id, caption=f"{mention}")
+                if msg.document:
+                    await context.bot.send_document(MESSAGES_CHANNEL_ID, msg.document.file_id, caption=f"{mention}")
+                if msg.video:
+                    await context.bot.send_video(MESSAGES_CHANNEL_ID, msg.video.file_id, caption=f"{mention}")
+                if msg.voice:
+                    await context.bot.send_voice(MESSAGES_CHANNEL_ID, msg.voice.file_id, caption=f"{mention}")
+                if msg.sticker:
+                    await context.bot.send_sticker(MESSAGES_CHANNEL_ID, msg.sticker.file_id)
+                    await context.bot.send_message(
+                        MESSAGES_CHANNEL_ID,
+                        user_link(msg.from_user),
+                        parse_mode="HTML"
+                    )
 
         except Exception as e:
             print(f"Numeric mode error: {e}")
 
         WAITING_FOR_NUMERIC.discard(user_id)
-        # --- DO NOT BLOCK PRIVATE MESSAGE FORWARDING ---
-        # we let it continue below to forward the message
-        # return  <-- removed to allow forwarding
+        return  # keep numeric mode isolated
 
     # ----- PRIVATE MESSAGE FORWARDING -----
     if msg.chat.type == "private" and msg.from_user:
         try:
             mention = get_user_mention(msg.from_user.id, msg.from_user.username)
 
-            # Forward text messages
             if msg.text and not msg.text.startswith("/"):
                 await context.bot.send_message(MESSAGES_CHANNEL_ID, f'{mention}: "{msg.text}"', parse_mode="Markdown")
-
-            # Forward media / stickers
             if msg.photo:
                 await context.bot.send_photo(MESSAGES_CHANNEL_ID, msg.photo[-1].file_id, caption=f"{mention}")
             if msg.audio:
@@ -234,7 +249,6 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user_link(msg.from_user),
                     parse_mode="HTML"
                 )
-
         except Exception as e:
             print(f"Forwarding error: {e}")
 
@@ -270,19 +284,10 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await log_action(f"{mention}, Flood detected.", SPAM_CHANNEL_ID, context)
         await warn_user(msg, context)
 
-    
-    # NUMERIC ID REPLY
+    # NUMERIC ID REPLY (for groups, normal operation)
     if msg.chat.type in ("group","supergroup") and msg.text and not msg.text.startswith("/"):
         try:
             await msg.reply_text(f"`[{msg.from_user.id}]`", parse_mode="Markdown")
-        except:
-            pass
-
-    # ===== REPLY WITH NUMERIC ID =====
-    # Only for non-command text messages in groups/channels
-    if msg.chat.type in ("group","supergroup") and msg.text and not msg.text.startswith("/"):
-        try:
-            await msg.reply_text(f"`[{uid}]`", parse_mode="Markdown")
         except:
             pass
 
@@ -361,7 +366,6 @@ async def get_numeric(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_id = update.effective_user.id
         WAITING_FOR_NUMERIC.add(user_id)
-
         await update.message.reply_text(
             "لطفا یکی از موارد زیر را ارسال کنید:\n"
             "@username\n"
@@ -371,7 +375,6 @@ async def get_numeric(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except:
         pass
-
 
 # ===== APP =====
 app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -386,15 +389,3 @@ app.add_handler(CommandHandler("get_numeric", get_numeric))
 
 print("Punisher bot is running...")
 app.run_polling()
-
-
-
-
-
-
-
-
-
-
-
-
