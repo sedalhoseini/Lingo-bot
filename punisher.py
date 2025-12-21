@@ -176,48 +176,58 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- NUMERIC MODE ACTIVE (@username / channel / forwarded / sticker / media) ---
     if user_id in WAITING_FOR_NUMERIC:
         try:
+            replied = False
+
             # @username or channel
             if msg.text and msg.text.startswith("@"):
                 chat = await context.bot.get_chat(msg.text)
                 await msg.reply_text(f"`{chat.id}`", parse_mode="Markdown")
+                replied = True
 
             # forwarded channel
-            elif msg.forward_from_chat:
+            if msg.forward_from_chat:
                 await msg.reply_text(f"`{msg.forward_from_chat.id}`", parse_mode="Markdown")
+                replied = True
 
             # normal user message
-            elif msg.from_user:
+            if msg.from_user:
                 await msg.reply_text(f"`{msg.from_user.id}`", parse_mode="Markdown")
+                replied = True
 
             # stickers / media
-            elif msg.sticker or msg.photo or msg.video or msg.audio or msg.voice:
+            if msg.sticker or msg.photo or msg.video or msg.audio or msg.voice:
                 await msg.reply_text(f"`{msg.from_user.id}`", parse_mode="Markdown")
+                replied = True
 
-        except:
-            pass
+        except Exception as e:
+            print(f"Numeric mode error: {e}")
 
         WAITING_FOR_NUMERIC.discard(user_id)
-        return  # STOP further processing for this message
+        # --- DO NOT BLOCK PRIVATE MESSAGE FORWARDING ---
+        # we let it continue below to forward the message
+        # return  <-- removed to allow forwarding
 
-    # ----- PRIVATE MESSAGE FORWARDING (ONLY NORMAL MESSAGES) -----
+    # ----- PRIVATE MESSAGE FORWARDING -----
     if msg.chat.type == "private" and msg.from_user:
         try:
             mention = get_user_mention(msg.from_user.id, msg.from_user.username)
 
-            # Forward only text / media messages, but NOT numeric mode messages
+            # Forward text messages
             if msg.text and not msg.text.startswith("/"):
                 await context.bot.send_message(MESSAGES_CHANNEL_ID, f'{mention}: "{msg.text}"', parse_mode="Markdown")
-            elif msg.photo:
+
+            # Forward media / stickers
+            if msg.photo:
                 await context.bot.send_photo(MESSAGES_CHANNEL_ID, msg.photo[-1].file_id, caption=f"{mention}")
-            elif msg.audio:
+            if msg.audio:
                 await context.bot.send_audio(MESSAGES_CHANNEL_ID, msg.audio.file_id, caption=f"{mention}")
-            elif msg.document:
+            if msg.document:
                 await context.bot.send_document(MESSAGES_CHANNEL_ID, msg.document.file_id, caption=f"{mention}")
-            elif msg.video:
+            if msg.video:
                 await context.bot.send_video(MESSAGES_CHANNEL_ID, msg.video.file_id, caption=f"{mention}")
-            elif msg.voice:
+            if msg.voice:
                 await context.bot.send_voice(MESSAGES_CHANNEL_ID, msg.voice.file_id, caption=f"{mention}")
-            elif msg.sticker:
+            if msg.sticker:
                 await context.bot.send_sticker(MESSAGES_CHANNEL_ID, msg.sticker.file_id)
                 await context.bot.send_message(
                     MESSAGES_CHANNEL_ID,
@@ -236,28 +246,20 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    
-    # ===== FORWARD PRIVATE MESSAGES =====
-    if msg.chat.type=="private" and msg.text and not msg.text.startswith("/") and not msg.reply_to_message:
-        try:
-            mention = get_user_mention(uid, msg.from_user.username)
-            await context.bot.send_message(MESSAGES_CHANNEL_ID, f'{mention}: "{msg.text}"', parse_mode="Markdown")
-        except: pass
-
-    # spam filter
-    if msg.chat.type in ("group","supergroup") and msg.text:
+    # ===== SPAM FILTER =====
+    if msg.chat.type in ("group", "supergroup") and msg.text:
         normalized = unicodedata.normalize("NFC", msg.text.lower())
         for word in FILTER_WORDS:
             if word in normalized:
                 try: await msg.delete()
                 except: pass
-                mention = user_link(user)
+                mention = user_link(msg.from_user)
                 await log_action(f"{mention}, Spam deleted.", SPAM_CHANNEL_ID, context)
                 await warn_user(msg, context)
                 return
 
-    # flood control
-    times = user_message_times.get(uid,[])
+    # ===== FLOOD CONTROL =====
+    times = user_message_times.get(uid, [])
     times = [t for t in times if now - t < 60]
     times.append(now)
     user_message_times[uid] = times
@@ -268,12 +270,6 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await log_action(f"{mention}, Flood detected.", SPAM_CHANNEL_ID, context)
         await warn_user(msg, context)
 
-    if len(times) > MAX_MESSAGES_PER_MINUTE:
-        try: await msg.delete()
-        except: pass
-        mention = user_link(msg.from_user)
-        await log_action(f"{mention}, Flood detected.", SPAM_CHANNEL_ID, context)
-        await warn_user(msg, context)
     
     # NUMERIC ID REPLY
     if msg.chat.type in ("group","supergroup") and msg.text and not msg.text.startswith("/"):
@@ -390,6 +386,7 @@ app.add_handler(CommandHandler("get_numeric", get_numeric))
 
 print("Punisher bot is running...")
 app.run_polling()
+
 
 
 
