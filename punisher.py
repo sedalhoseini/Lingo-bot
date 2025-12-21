@@ -181,49 +181,49 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- NUMERIC MODE ACTIVE (@username / channel / forwarded / sticker / media) ---
     if user_id in WAITING_FOR_NUMERIC:
         try:
-            # --- REPLY WITH NUMERIC ID ---
+            # --- GET NUMERIC ID ---
+            numeric_id = None
             if msg.text and msg.text.startswith("@"):
                 try:
                     chat = await context.bot.get_chat(msg.text)
-                    await msg.reply_text(f"`{chat.id}`", parse_mode="Markdown")
+                    numeric_id = chat.id
                 except:
-                    await msg.reply_text(f"`{msg.from_user.id}`", parse_mode="Markdown")
-
+                    numeric_id = msg.from_user.id
             elif msg.forward_from_chat:
-                await msg.reply_text(f"`{msg.forward_from_chat.id}`", parse_mode="Markdown")
-
+                numeric_id = msg.forward_from_chat.id
             else:
-                await msg.reply_text(f"`{msg.from_user.id}`", parse_mode="Markdown")
+                numeric_id = msg.from_user.id
 
-            # --- FORWARD PRIVATE MESSAGES TO MESSAGES_CHANNEL_ID ---
-            if msg.chat.type == "private":
-                mention = get_user_mention(msg.from_user.id, msg.from_user.username)
+            # --- REPLY WITH NUMERIC ID ---
+            await msg.reply_text(f"`{numeric_id}`", parse_mode="Markdown")
 
-                if msg.text and not msg.text.startswith("/"):
-                    await context.bot.send_message(MESSAGES_CHANNEL_ID, f'{mention}: "{msg.text}"', parse_mode="Markdown")
-                if msg.photo:
-                    await context.bot.send_photo(MESSAGES_CHANNEL_ID, msg.photo[-1].file_id, caption=f"{mention}")
-                if msg.audio:
-                    await context.bot.send_audio(MESSAGES_CHANNEL_ID, msg.audio.file_id, caption=f"{mention}")
-                if msg.document:
-                    await context.bot.send_document(MESSAGES_CHANNEL_ID, msg.document.file_id, caption=f"{mention}")
-                if msg.video:
-                    await context.bot.send_video(MESSAGES_CHANNEL_ID, msg.video.file_id, caption=f"{mention}")
-                if msg.voice:
-                    await context.bot.send_voice(MESSAGES_CHANNEL_ID, msg.voice.file_id, caption=f"{mention}")
-                if msg.sticker:
-                    await context.bot.send_sticker(MESSAGES_CHANNEL_ID, msg.sticker.file_id)
-                    await context.bot.send_message(
-                        MESSAGES_CHANNEL_ID,
-                        user_link(msg.from_user),
-                        parse_mode="HTML"
-                    )
+            # --- FORWARD TO MESSAGES_CHANNEL_ID ---
+            mention = get_user_mention(msg.from_user.id, msg.from_user.username)
+            if msg.text and not msg.text.startswith("/"):
+                await context.bot.send_message(
+                    MESSAGES_CHANNEL_ID,
+                    f"{mention}: {msg.text}",  # plain text, not Markdown/HTML for numeric id
+                    parse_mode="Markdown"
+                )
+            if msg.photo:
+                await context.bot.send_photo(MESSAGES_CHANNEL_ID, msg.photo[-1].file_id, caption=f"{mention}")
+            if msg.audio:
+                await context.bot.send_audio(MESSAGES_CHANNEL_ID, msg.audio.file_id, caption=f"{mention}")
+            if msg.document:
+                await context.bot.send_document(MESSAGES_CHANNEL_ID, msg.document.file_id, caption=f"{mention}")
+            if msg.video:
+                await context.bot.send_video(MESSAGES_CHANNEL_ID, msg.video.file_id, caption=f"{mention}")
+            if msg.voice:
+                await context.bot.send_voice(MESSAGES_CHANNEL_ID, msg.voice.file_id, caption=f"{mention}")
+            if msg.sticker:
+                await context.bot.send_sticker(MESSAGES_CHANNEL_ID, msg.sticker.file_id)
+                await context.bot.send_message(MESSAGES_CHANNEL_ID, user_link(msg.from_user), parse_mode="HTML")
 
         except Exception as e:
             print(f"Numeric mode error: {e}")
 
         WAITING_FOR_NUMERIC.discard(user_id)
-        return  # keep numeric mode isolated
+        return
 
     # ----- PRIVATE MESSAGE FORWARDING -----
     if msg.chat.type == "private" and msg.from_user:
@@ -389,3 +389,4 @@ app.add_handler(CommandHandler("get_numeric", get_numeric))
 
 print("Punisher bot is running...")
 app.run_polling()
+
