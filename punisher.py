@@ -108,16 +108,6 @@ async def log_action(text, channel_id, context):
     except:
         pass
 
-# ===== ID REPLY HELPER =====
-async def reply_with_id(update, target_id):
-    try:
-        await update.message.reply_text(
-            f"`{target_id}`",
-            parse_mode="Markdown"
-        )
-    except:
-        pass
-
 # ===== BUTTON HANDLER =====
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -181,6 +171,7 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- NUMERIC MODE ACTIVE (@username / channel / forwarded / sticker / media) ---
     if user_id in WAITING_FOR_NUMERIC:
         try:
+            # --- GET NUMERIC ID ---
             numeric_id = None
             if msg.text and msg.text.startswith("@"):
                 try:
@@ -193,31 +184,8 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 numeric_id = msg.from_user.id
 
-            # --- REPLY WITH CLICKABLE NAME ---
-            await msg.reply_text(user_link(msg.from_user), parse_mode="HTML")
-
-            # --- FORWARD TO MESSAGES_CHANNEL_ID ---
-            mention = user_link(msg.from_user)
-            if msg.text and not msg.text.startswith("/"):
-                await context.bot.send_message(
-                    MESSAGES_CHANNEL_ID,
-                    f"{mention}: {msg.text}",
-                    parse_mode="HTML",
-                    disable_web_page_preview=True
-                )
-            if msg.photo:
-                await context.bot.send_photo(MESSAGES_CHANNEL_ID, msg.photo[-1].file_id, caption=f"{mention}")
-            if msg.audio:
-                await context.bot.send_audio(MESSAGES_CHANNEL_ID, msg.audio.file_id, caption=f"{mention}")
-            if msg.document:
-                await context.bot.send_document(MESSAGES_CHANNEL_ID, msg.document.file_id, caption=f"{mention}")
-            if msg.video:
-                await context.bot.send_video(MESSAGES_CHANNEL_ID, msg.video.file_id, caption=f"{mention}")
-            if msg.voice:
-                await context.bot.send_voice(MESSAGES_CHANNEL_ID, msg.voice.file_id, caption=f"{mention}")
-            if msg.sticker:
-                await context.bot.send_sticker(MESSAGES_CHANNEL_ID, msg.sticker.file_id)
-                await context.bot.send_message(MESSAGES_CHANNEL_ID, mention, parse_mode="HTML")
+            # --- REPLY WITH NUMERIC ID ---
+            await msg.reply_text(f"`{numeric_id}`", parse_mode="Markdown")
 
         except Exception as e:
             print(f"Numeric mode error: {e}")
@@ -231,20 +199,19 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             mention = user_link(msg.from_user)
 
             if msg.text and not msg.text.startswith("/"):
-                await context.bot.send_message(MESSAGES_CHANNEL_ID, f'{mention}: "{msg.text}"', parse_mode="HTML", disable_web_page_preview=True)
+                await context.bot.send_message(MESSAGES_CHANNEL_ID, f"{mention}: {msg.text}", parse_mode="HTML")
             if msg.photo:
-                await context.bot.send_photo(MESSAGES_CHANNEL_ID, msg.photo[-1].file_id, caption=f"{mention}")
+                await context.bot.send_photo(MESSAGES_CHANNEL_ID, msg.photo[-1].file_id, caption=f"{mention}", parse_mode="HTML")
             if msg.audio:
-                await context.bot.send_audio(MESSAGES_CHANNEL_ID, msg.audio.file_id, caption=f"{mention}")
+                await context.bot.send_audio(MESSAGES_CHANNEL_ID, msg.audio.file_id, caption=f"{mention}", parse_mode="HTML")
             if msg.document:
-                await context.bot.send_document(MESSAGES_CHANNEL_ID, msg.document.file_id, caption=f"{mention}")
+                await context.bot.send_document(MESSAGES_CHANNEL_ID, msg.document.file_id, caption=f"{mention}", parse_mode="HTML")
             if msg.video:
-                await context.bot.send_video(MESSAGES_CHANNEL_ID, msg.video.file_id, caption=f"{mention}")
+                await context.bot.send_video(MESSAGES_CHANNEL_ID, msg.video.file_id, caption=f"{mention}", parse_mode="HTML")
             if msg.voice:
-                await context.bot.send_voice(MESSAGES_CHANNEL_ID, msg.voice.file_id, caption=f"{mention}")
+                await context.bot.send_voice(MESSAGES_CHANNEL_ID, msg.voice.file_id, caption=f"{mention}", parse_mode="HTML")
             if msg.sticker:
                 await context.bot.send_sticker(MESSAGES_CHANNEL_ID, msg.sticker.file_id)
-                await context.bot.send_message(MESSAGES_CHANNEL_ID, mention, parse_mode="HTML")
         except Exception as e:
             print(f"Forwarding error: {e}")
 
@@ -329,7 +296,7 @@ async def list_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
             mention = get_user_mention(user.id, user.username)
         except:
             mention = f"user_{uid}"
-        await update.message.reply_text(f"{mention}: {data['count']}", reply_markup=build_warning_keyboard(uid), parse_mode="HTML")
+        await update.message.reply_text(f"{mention}: {data['count']}", reply_markup=build_warning_keyboard(uid))
 
 @admin_only
 async def list_muted(update: Update, context):
@@ -342,7 +309,7 @@ async def list_muted(update: Update, context):
         return
     for uid,until in muted_users.items():
         until_str = datetime.fromtimestamp(until, tz=TEHRAN).strftime("%Y-%m-%d %H:%M:%S")
-        await update.message.reply_text(f"{get_user_mention(uid,None)} until {until_str}", reply_markup=build_muted_keyboard(uid), parse_mode="HTML")
+        await update.message.reply_text(f"{get_user_mention(uid,None)} until {until_str}", reply_markup=build_muted_keyboard(uid))
 
 # ===== NORMAL USER COMMANDS =====
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
