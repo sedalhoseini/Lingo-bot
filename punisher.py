@@ -166,64 +166,45 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===== HANDLE MESSAGES =====
 async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
-
-        # --- GET NUMERIC MODE (@username / channel) ---
-    if msg and msg.text and msg.text.startswith("@"):
-        try:
-            chat = await context.bot.get_chat(msg.text)
-            await msg.reply_text(f"`{chat.id}`", parse_mode="Markdown")
-            return
-        except:
-            pass
-
-    # --- FORWARDED CHANNEL ---
-    if msg.forward_from_chat:
-        await reply_with_id(update, msg.forward_from_chat.id)
+    if not msg or not msg.from_user: 
         return
 
-    # --- NORMAL USER MESSAGE ---
-    if msg.from_user:
-        await reply_with_id(update, msg.from_user.id)
+    user_id = msg.from_user.id
+    uid = user_id
+    now = int(time.time())
 
-    if not msg or not msg.from_user: return
-    
-    # --- NUMERIC MODE ACTIVE ---
+    # --- NUMERIC MODE ACTIVE (@username / channel / forwarded / sticker / media) ---
     if user_id in WAITING_FOR_NUMERIC:
         try:
             # @username or channel
             if msg.text and msg.text.startswith("@"):
                 chat = await context.bot.get_chat(msg.text)
-                await reply_with_id(update, chat.id)
+                await msg.reply_text(f"`{chat.id}`", parse_mode="Markdown")
 
             # forwarded channel
             elif msg.forward_from_chat:
-                await reply_with_id(update, msg.forward_from_chat.id)
+                await msg.reply_text(f"`{msg.forward_from_chat.id}`", parse_mode="Markdown")
 
-            # normal user
+            # normal user message
             elif msg.from_user:
-                await reply_with_id(update, msg.from_user.id)
+                await msg.reply_text(f"`{msg.from_user.id}`", parse_mode="Markdown")
+
+            # stickers / media
+            elif msg.sticker or msg.photo or msg.video or msg.audio or msg.voice:
+                await msg.reply_text(f"`{msg.from_user.id}`", parse_mode="Markdown")
 
         except:
             pass
 
         WAITING_FOR_NUMERIC.discard(user_id)
-        return
+        return  # STOP further processing for this message
 
-    uid = msg.from_user.id
-    now = int(time.time())
-       
-# PRIVATE MESSAGE FORWARDING
+    # ----- PRIVATE MESSAGE FORWARDING (ONLY NORMAL MESSAGES) -----
     if msg.chat.type == "private" and msg.from_user:
         try:
             mention = get_user_mention(msg.from_user.id, msg.from_user.username)
 
-            # --- NUMERIC ID MODE (media/sticker) ---
-            if numeric_mode.get(msg.from_user.id):   # if user requested numeric ID
-                if msg.sticker or msg.photo or msg.video or msg.audio or msg.voice:
-                    await msg.reply_text(f"`{msg.from_user.id}`", parse_mode="Markdown")
-                    numeric_mode.pop(msg.from_user.id, None)  # exit numeric mode
-                    return  # do NOT forward or log
-
+            # Forward only text / media messages, but NOT numeric mode messages
             if msg.text and not msg.text.startswith("/"):
                 await context.bot.send_message(MESSAGES_CHANNEL_ID, f'{mention}: "{msg.text}"', parse_mode="Markdown")
             elif msg.photo:
@@ -244,10 +225,8 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="HTML"
                 )
 
-
         except Exception as e:
             print(f"Forwarding error: {e}")
-
 
     # ===== DELETE JOIN / LEAVE MESSAGES =====
     if msg.new_chat_members or msg.left_chat_member:
@@ -256,6 +235,7 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
         return
+
     
     # ===== FORWARD PRIVATE MESSAGES =====
     if msg.chat.type=="private" and msg.text and not msg.text.startswith("/") and not msg.reply_to_message:
@@ -410,6 +390,7 @@ app.add_handler(CommandHandler("get_numeric", get_numeric))
 
 print("Punisher bot is running...")
 app.run_polling()
+
 
 
 
