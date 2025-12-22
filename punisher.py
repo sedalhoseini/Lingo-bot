@@ -37,7 +37,6 @@ TEHRAN = pytz.timezone("Asia/Tehran")
 user_message_times = {}
 user_warnings = {}
 muted_users = {}
-WAITING_FOR_NUMERIC = set()
 
 # ===== HELPERS =====
 def admin_only(func):
@@ -178,53 +177,6 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = user_id
     now = int(time.time())
 
-    # --- NUMERIC MODE ACTIVE (@username / channel / forwarded / sticker / media) ---
-    if user_id in WAITING_FOR_NUMERIC:
-        try:
-            # --- GET NUMERIC ID ---
-            numeric_id = None
-            if msg.text and msg.text.startswith("@"):
-                try:
-                    chat = await context.bot.get_chat(msg.text)
-                    numeric_id = chat.id
-                except:
-                    numeric_id = msg.from_user.id
-            elif msg.forward_from_chat:
-                numeric_id = msg.forward_from_chat.id
-            else:
-                numeric_id = msg.from_user.id
-
-            # --- REPLY WITH NUMERIC ID ---
-            await msg.reply_text(f"`{numeric_id}`", parse_mode="Markdown")
-
-            # --- FORWARD TO MESSAGES_CHANNEL_ID ---
-            mention = get_user_mention(msg.from_user.id, msg.from_user.username)
-            if msg.text and not msg.text.startswith("/"):
-                await context.bot.send_message(
-                    MESSAGES_CHANNEL_ID,
-                    f"{mention}: {msg.text}",  # plain text, not Markdown/HTML for numeric id
-                    parse_mode="Markdown"
-                )
-            if msg.photo:
-                await context.bot.send_photo(MESSAGES_CHANNEL_ID, msg.photo[-1].file_id, caption=f"{mention}")
-            if msg.audio:
-                await context.bot.send_audio(MESSAGES_CHANNEL_ID, msg.audio.file_id, caption=f"{mention}")
-            if msg.document:
-                await context.bot.send_document(MESSAGES_CHANNEL_ID, msg.document.file_id, caption=f"{mention}")
-            if msg.video:
-                await context.bot.send_video(MESSAGES_CHANNEL_ID, msg.video.file_id, caption=f"{mention}")
-            if msg.voice:
-                await context.bot.send_voice(MESSAGES_CHANNEL_ID, msg.voice.file_id, caption=f"{mention}")
-            if msg.sticker:
-                await context.bot.send_sticker(MESSAGES_CHANNEL_ID, msg.sticker.file_id)
-                await context.bot.send_message(MESSAGES_CHANNEL_ID, user_link(msg.from_user), parse_mode="HTML")
-
-        except Exception as e:
-            print(f"Numeric mode error: {e}")
-
-        WAITING_FOR_NUMERIC.discard(user_id)
-        return
-
     # ----- PRIVATE MESSAGE FORWARDING -----
     if msg.chat.type == "private" and msg.from_user:
         try:
@@ -283,13 +235,6 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mention = user_link(msg.from_user)
         await log_action(f"{mention}, Flood detected.", SPAM_CHANNEL_ID, context)
         await warn_user(msg, context)
-
-    # NUMERIC ID REPLY (for groups, normal operation)
-    if msg.chat.type in ("group","supergroup") and msg.text and not msg.text.startswith("/"):
-        try:
-            await msg.reply_text(f"`[{msg.from_user.id}]`", parse_mode="Markdown")
-        except:
-            pass
 
 # ===== WARN & MUTE =====
 async def warn_user(msg, context):
@@ -361,20 +306,58 @@ async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-# ===== GET NUMERIC COMMAND =====
-async def get_numeric(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ===== USER INFO COMMAND =====
+async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Usage:
+      /userinfo <username or numeric id>
+    Example:
+      /userinfo @someone
+      /userinfo 123456789
+    """
+
+    # 1) get argument
     try:
-        user_id = update.effective_user.id
-        WAITING_FOR_NUMERIC.add(user_id)
-        await update.message.reply_text(
-            "لطفا یکی از موارد زیر را ارسال کنید:\n"
-            "@username\n"
-            "یا یک پیام فوروارد شده از کانال\n"
-            "یا یک پیام معمولی\n"
-            "یا استیکر / مدیا"
-        )
+        if not context.args:
+            await update.message.reply_text("Please provide a username or ID.")
+            return
+        target = context.args[0].strip()
+    except:
+        await update.message.reply_text("Usage: /userinfo <username or id>")
+        return
+
+    # 2) try get chat info
+    try:
+        chat = await context.bot.get_chat(target)
+    except Exception as e:
+        await update.message.reply_text(f"Could not find user/chat: {e}")
+        return
+
+    # 3) build output text
+    username = f"@{chat.username}" if chat.username else "(no username)"
+    user_id = chat.id
+    first = chat.first_name or ""
+    last = chat.last_name or ""
+    description = f"Name: {first} {last}\nUsername: {username}\nID: `{user_id}`"
+
+    # 4) try get profile photo
+    try:
+        photos = await context.bot.get_user_profile_photos(user_id)
+        if photos.total_count > 0:
+            file_id = photos.photos[0][-1].file_id
+            await context.bot.send_photo(
+                update.effective_chat.id,
+                file_id,
+                caption=description,
+                parse_mode="Markdown"
+            )
+            return
     except:
         pass
+
+    # 5) send text only if no photo
+    await update.message.reply_text(description, parse_mode="Markdown")
+
 
 # ===== APP =====
 app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -385,7 +368,8 @@ app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_messages))
 app.add_handler(CallbackQueryHandler(button_handler))
 app.add_handler(CommandHandler("start", cmd_start))
 app.add_handler(CommandHandler("myid", cmd_myid))
-app.add_handler(CommandHandler("get_numeric", get_numeric))
+app.add_handler(CommandHandler("userinfo", cmd_userinfo))
 
 print("Punisher bot is running...")
 app.run_polling()
+
