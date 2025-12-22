@@ -310,56 +310,40 @@ async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
 
-    # Case 1: reply to a user
+    # Detect user
     if msg.reply_to_message and msg.reply_to_message.from_user:
         user = msg.reply_to_message.from_user
-
-    # Case 2: forwarded message
     elif msg.forward_from:
         user = msg.forward_from
-
-    elif msg.forward_from_chat:
-        chat = msg.forward_from_chat
-        text = (
-            f"Title: {chat.title}\n"
-            f"Username: @{chat.username if chat.username else 'None'}\n"
-            f"ID: `{chat.id}`"
-        )
-        await msg.reply_text(text, parse_mode="Markdown")
-        return
-
     else:
         await msg.reply_text(
-            "Please reply to a user's message or forward a message.\n\n"
-            "Example:\n"
-            "• Reply to a message → /userinfo\n"
-            "• Forward a message → /userinfo"
+            "Reply to a user message or forward a message.",
         )
         return
 
-    # Build user info
     username = f"@{user.username}" if user.username else "None"
+
     text = (
-        f"Name: {user.first_name or ''} {user.last_name or ''}\n"
-        f"Username: {username}\n"
-        f"ID: `{user.id}`"
+        f"<b>Name:</b> {user.first_name or ''} {user.last_name or ''}\n"
+        f"<b>Username:</b> {username}\n"
+        f"<b>ID:</b> <code>{user.id}</code>"
     )
 
-    # Try profile photo
     try:
         photos = await context.bot.get_user_profile_photos(user.id)
         if photos.total_count > 0:
             await context.bot.send_photo(
-                msg.chat_id,
-                photos.photos[0][-1].file_id,
+                chat_id=msg.chat_id,
+                photo=photos.photos[0][-1].file_id,
                 caption=text,
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
             return
     except:
         pass
 
-    await msg.reply_text(text, parse_mode="Markdown")
+    await msg.reply_text(text, parse_mode="HTML")
+
 
 
 # ===== APP =====
@@ -380,6 +364,7 @@ app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_messages))
 
 print("Punisher bot is running...")
 app.run_polling()
+
 
 
 
