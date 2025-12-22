@@ -363,17 +363,23 @@ async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ===== APP =====
-app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(ChatMemberHandler(handle_chat_member_update, ChatMemberHandler.CHAT_MEMBER))
-app.add_handler(CommandHandler("warnings", list_warnings))
-app.add_handler(CommandHandler("muted", list_muted))
-app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_messages))
-app.add_handler(CallbackQueryHandler(button_handler))
+
+# ---- COMMANDS FIRST ----
 app.add_handler(CommandHandler("start", cmd_start))
 app.add_handler(CommandHandler("myid", cmd_myid))
 app.add_handler(CommandHandler("userinfo", cmd_userinfo))
+app.add_handler(CommandHandler("warnings", list_warnings))
+app.add_handler(CommandHandler("muted", list_muted))
+
+# ---- CALLBACKS ----
+app.add_handler(CallbackQueryHandler(button_handler))
+
+# ---- MESSAGE HANDLER LAST ----
+app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_messages))
 
 print("Punisher bot is running...")
 app.run_polling()
+
 
 
