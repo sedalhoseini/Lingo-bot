@@ -126,30 +126,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "mute":
         muted_users[user_id] = now + value
         save_data(MUTED_FILE, muted_users)
-        try:
-            await context.bot.restrict_chat_member(
-                chat_id=update.effective_chat.id,
-                user_id=user_id,
-                permissions=ChatPermissions(
-                    can_send_messages=False,
-                    can_send_media_messages=False,
-                    can_send_other_messages=False,
-                    can_add_web_page_previews=False
-                ),
-                until_date=now + value
-            )
-        except:
-            pass
-        await query.edit_message_text(f"{get_user_mention(user_id,None)} muted for {value//60} minutes")
-
-    elif action == "increase":
-        if user_id in muted_users:
-            muted_users[user_id] += value
-            save_data(MUTED_FILE, muted_users)
-            until_str = datetime.fromtimestamp(muted_users[user_id], tz=TEHRAN).strftime("%Y-%m-%d %H:%M:%S")
+        chat_id = update.effective_chat.id if update.effective_chat else None
+        if chat_id:
             try:
                 await context.bot.restrict_chat_member(
-                    chat_id=update.effective_chat.id,
+                    chat_id=chat_id,
                     user_id=user_id,
                     permissions=ChatPermissions(
                         can_send_messages=False,
@@ -157,31 +138,58 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         can_send_other_messages=False,
                         can_add_web_page_previews=False
                     ),
-                    until_date=muted_users[user_id]
+                    until_date=now + value
                 )
-            except:
-                pass
+            except Exception as e:
+                print(f"Button mute failed: {e}")
+        await query.edit_message_text(f"{get_user_mention(user_id,None)} muted for {value//60} minutes")
+
+
+    elif action == "increase":
+        if user_id in muted_users:
+            muted_users[user_id] += value
+            save_data(MUTED_FILE, muted_users)
+            chat_id = update.effective_chat.id if update.effective_chat else None
+            until_str = datetime.fromtimestamp(muted_users[user_id], tz=TEHRAN).strftime("%Y-%m-%d %H:%M:%S")
+            if chat_id:
+                try:
+                    await context.bot.restrict_chat_member(
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        permissions=ChatPermissions(
+                            can_send_messages=False,
+                            can_send_media_messages=False,
+                            can_send_other_messages=False,
+                            can_add_web_page_previews=False
+                        ),
+                        until_date=muted_users[user_id]
+                    )
+                except Exception as e:
+                    print(f"Button increase failed: {e}")
             await query.edit_message_text(f"Muted duration increased for {get_user_mention(user_id,None)}. New until: {until_str}")
         else:
             await query.edit_message_text("User is not muted")
+
 
     elif action == "unmute":
         if user_id in muted_users:
             del muted_users[user_id]
             save_data(MUTED_FILE, muted_users)
-            try:
-                await context.bot.restrict_chat_member(
-                    chat_id=update.effective_chat.id,
-                    user_id=user_id,
-                    permissions=ChatPermissions(
-                        can_send_messages=True,
-                        can_send_media_messages=True,
-                        can_send_other_messages=True,
-                        can_add_web_page_previews=True
+            chat_id = update.effective_chat.id if update.effective_chat else None
+            if chat_id:
+                try:
+                    await context.bot.restrict_chat_member(
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        permissions=ChatPermissions(
+                            can_send_messages=True,
+                            can_send_media_messages=True,
+                            can_send_other_messages=True,
+                            can_add_web_page_previews=True
+                        )
                     )
-                )
-            except:
-                pass
+                except Exception as e:
+                    print(f"Button unmute failed: {e}")
             await query.edit_message_text(f"{get_user_mention(user_id,None)} unmuted")
         else:
             await query.edit_message_text("User is not muted")
@@ -259,11 +267,21 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def warn_user(msg, context):
     uid = msg.from_user.id
     now = int(time.time())
-    user_warnings[uid] = {"count": user_warnings.get(uid,{"count":0})["count"] +1, "time": now}
-    save_data(WARNINGS_FILE,user_warnings)
+
+    # Increment warnings
+    user_warnings[uid] = {"count": user_warnings.get(uid, {"count": 0})["count"] + 1, "time": now}
+    save_data(WARNINGS_FILE, user_warnings)
+
+    # If warning threshold reached
     if user_warnings[uid]["count"] >= WARNING_LIMIT:
-        muted_users[uid] = now + 600
+        # Reset warnings after muting
+        user_warnings[uid] = {"count": 0, "time": now}
+        save_data(WARNINGS_FILE, user_warnings)
+
+        mute_duration = 600  # 10 minutes
+        muted_users[uid] = now + mute_duration
         save_data(MUTED_FILE, muted_users)
+
         try:
             await context.bot.restrict_chat_member(
                 chat_id=msg.chat.id,
@@ -274,14 +292,13 @@ async def warn_user(msg, context):
                     can_send_other_messages=False,
                     can_add_web_page_previews=False
                 ),
-                until_date=now + 600
+                until_date=now + mute_duration
             )
-        except:
-            pass
+        except Exception as e:
+            print(f"Auto-mute failed: {e}")
+
         mention = user_link(msg.from_user)
-        await log_action(f"{mention}, Got muted.", SPAM_CHANNEL_ID, context)
-        user_warnings[uid] = {"count":0,"time":now}
-        save_data(WARNINGS_FILE, user_warnings)
+        await log_action(f"{mention}, got muted automatically after {WARNING_LIMIT} warnings.", SPAM_CHANNEL_ID, context)
 
 # ===== CHAT MEMBER HANDLER =====
 async def handle_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -389,6 +406,7 @@ app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_messages))
 
 print("Punisher bot is running...")
 app.run_polling()
+
 
 
 
