@@ -125,14 +125,42 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif action == "mute":
         muted_users[user_id] = now + value
-        save_data(MUTED_FILE,muted_users)
+        save_data(MUTED_FILE, muted_users)
+        try:
+            await context.bot.restrict_chat_member(
+                chat_id=update.effective_chat.id,
+                user_id=user_id,
+                permissions=ChatPermissions(
+                    can_send_messages=False,
+                    can_send_media_messages=False,
+                    can_send_other_messages=False,
+                    can_add_web_page_previews=False
+                ),
+                until_date=now + value
+            )
+        except:
+            pass
         await query.edit_message_text(f"{get_user_mention(user_id,None)} muted for {value//60} minutes")
 
     elif action == "increase":
         if user_id in muted_users:
             muted_users[user_id] += value
-            save_data(MUTED_FILE,muted_users)
+            save_data(MUTED_FILE, muted_users)
             until_str = datetime.fromtimestamp(muted_users[user_id], tz=TEHRAN).strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                await context.bot.restrict_chat_member(
+                    chat_id=update.effective_chat.id,
+                    user_id=user_id,
+                    permissions=ChatPermissions(
+                        can_send_messages=False,
+                        can_send_media_messages=False,
+                        can_send_other_messages=False,
+                        can_add_web_page_previews=False
+                    ),
+                    until_date=muted_users[user_id]
+                )
+            except:
+                pass
             await query.edit_message_text(f"Muted duration increased for {get_user_mention(user_id,None)}. New until: {until_str}")
         else:
             await query.edit_message_text("User is not muted")
@@ -235,13 +263,25 @@ async def warn_user(msg, context):
     save_data(WARNINGS_FILE,user_warnings)
     if user_warnings[uid]["count"] >= WARNING_LIMIT:
         muted_users[uid] = now + 600
-        save_data(MUTED_FILE,muted_users)
-        try: await msg.chat.restrict_member(uid,permissions=ChatPermissions(can_send_messages=False),until_date=now+600)
-        except: pass
+        save_data(MUTED_FILE, muted_users)
+        try:
+            await context.bot.restrict_chat_member(
+                chat_id=msg.chat.id,
+                user_id=uid,
+                permissions=ChatPermissions(
+                    can_send_messages=False,
+                    can_send_media_messages=False,
+                    can_send_other_messages=False,
+                    can_add_web_page_previews=False
+                ),
+                until_date=now + 600
+            )
+        except:
+            pass
         mention = user_link(msg.from_user)
         await log_action(f"{mention}, Got muted.", SPAM_CHANNEL_ID, context)
         user_warnings[uid] = {"count":0,"time":now}
-        save_data(WARNINGS_FILE,user_warnings)
+        save_data(WARNINGS_FILE, user_warnings)
 
 # ===== CHAT MEMBER HANDLER =====
 async def handle_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -349,6 +389,7 @@ app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_messages))
 
 print("Punisher bot is running...")
 app.run_polling()
+
 
 
 
