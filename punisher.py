@@ -300,24 +300,32 @@ async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===== USER INFO COMMAND =====
 async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
+    user = None
 
-    # 1️⃣ Resolve target user
+    # 1️⃣ Reply to a user
     if msg.reply_to_message and msg.reply_to_message.from_user:
         user = msg.reply_to_message.from_user
+
+    # 2️⃣ Forwarded message
+    elif msg.forward_from:
+        user = msg.forward_from
+
+    # 3️⃣ Username argument
     elif context.args:
-        arg = context.args[0].lstrip("@")
+        username = context.args[0].lstrip("@")
         try:
-            user = await context.bot.get_chat(arg)
+            user = await context.bot.get_chat(username)
         except:
-            await msg.reply_text("User not found.")
+            await msg.reply_text("User not found or bot has no access.")
             return
+
+    # 4️⃣ Default to the sender if nothing else
     else:
         user = msg.from_user
 
-    # 2️⃣ Collect data
+    # Collect info
     username = f"@{user.username}" if user.username else "None"
     full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
-
     text = (
         f"<b>Name:</b> {full_name}\n"
         f"<b>Username:</b> {username}\n"
@@ -325,20 +333,8 @@ async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>Bot:</b> {'Yes' if user.is_bot else 'No'}"
     )
 
-    # 3️⃣ Send with profile photo if exists
-    try:
-        photos = await context.bot.get_user_profile_photos(user.id)
-        if photos.total_count > 0:
-            await context.bot.send_photo(
-                chat_id=msg.chat_id,
-                photo=photos.photos[0][-1].file_id,
-                caption=text,
-                parse_mode="HTML"
-            )
-            return
-    except:
-        pass
 
+    # Otherwise, send text info
     await msg.reply_text(text, parse_mode="HTML")
 
 
@@ -363,6 +359,7 @@ app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_messages))
 
 print("Punisher bot is running...")
 app.run_polling()
+
 
 
 
