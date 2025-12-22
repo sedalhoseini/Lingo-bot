@@ -15,8 +15,8 @@ import unicodedata
 
 # ========== CONFIG ==========
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_USER_IDS = {527164608}
-ADMIN_CHAT_IDS = {1087968824}
+ADMIN_USER_IDS = {527164608}  
+ADMIN_CHAT_IDS = {1087968824}  
 
 MAX_MESSAGES_PER_MINUTE = 5
 WARNING_LIMIT = 3
@@ -47,7 +47,7 @@ def admin_only(func):
             user = update.message.from_user
         elif update.callback_query:
             user = update.callback_query.from_user
-        if not user or (user.id not in ADMIN_USER_IDS):
+        if not user or (user.id not in ADMIN_USER_IDS and (update.message and not update.message.sender_chat or update.callback_query and not update.callback_query.message.sender_chat)):
             if update.message:
                 await update.message.reply_text("You are not allowed to use this command.")
             elif update.callback_query:
@@ -61,9 +61,10 @@ def user_link(user):
     name = user.full_name or "User"
     return f'<a href="tg://user?id={user.id}">{name}</a>'
 
-def get_user_mention(user_id, username=None):
-    display = f"@{username}" if username else f"user_{user_id}"
-    return f"[{display}](tg://user?id={user_id})"
+def get_user_mention(uid, username=None):
+    if username:
+        return f"@{username}"
+    return f'<a href="tg://user?id={uid}">User</a>'
 
 def build_warning_keyboard(user_id):
     buttons = [
@@ -83,17 +84,13 @@ def build_muted_keyboard(user_id):
 
 def load_data(file, default):
     try:
-        with open(file,"r") as f:
-            return json.load(f)
-    except:
-        return default
+        with open(file,"r") as f: return json.load(f)
+    except: return default
 
 def save_data(file, data):
     try:
-        with open(file,"w") as f:
-            json.dump(data,f)
-    except:
-        pass
+        with open(file,"w") as f: json.dump(data,f)
+    except: pass
 
 # ===== LOAD DATA =====
 user_warnings = load_data(WARNINGS_FILE, {})
@@ -105,48 +102,48 @@ async def log_action(text, channel_id, context):
         await context.bot.send_message(
             chat_id=channel_id,
             text=text,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+    except:
+        pass
+
+# ===== ID REPLY HELPER =====
+async def reply_with_id(update, target_id):
+    try:
+        await update.message.reply_text(
+            f"`{target_id}`",
             parse_mode="Markdown"
         )
     except:
         pass
 
-# ===== BUTTON HANDLER (FROM CODE A) =====
+# ===== BUTTON HANDLER =====
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data.split(":")
     action = data[0]
     user_id = int(data[1])
-    value = int(data[2]) if len(data) > 2 else None
+    value = int(data[2]) if len(data)>2 else None
     now = int(time.time())
 
     if action == "clearwarn":
-        user_warnings[user_id] = {"count": 0, "time": now}
-        save_data(WARNINGS_FILE, user_warnings)
-        await query.edit_message_text(
-            f"Warnings cleared for {get_user_mention(user_id,None)}",
-            parse_mode="Markdown"
-        )
+        user_warnings[user_id] = {"count":0,"time":now}
+        save_data(WARNINGS_FILE,user_warnings)
+        await query.edit_message_text(f"Warnings cleared for {get_user_mention(user_id,None)}")
 
     elif action == "mute":
         muted_users[user_id] = now + value
-        save_data(MUTED_FILE, muted_users)
-        await query.edit_message_text(
-            f"{get_user_mention(user_id,None)} muted for {value//60} minutes",
-            parse_mode="Markdown"
-        )
+        save_data(MUTED_FILE,muted_users)
+        await query.edit_message_text(f"{get_user_mention(user_id,None)} muted for {value//60} minutes")
 
     elif action == "increase":
         if user_id in muted_users:
             muted_users[user_id] += value
-            save_data(MUTED_FILE, muted_users)
-            until_str = datetime.fromtimestamp(
-                muted_users[user_id], tz=TEHRAN
-            ).strftime("%Y-%m-%d %H:%M:%S")
-            await query.edit_message_text(
-                f"Muted duration increased for {get_user_mention(user_id,None)}.\nNew until: {until_str}",
-                parse_mode="Markdown"
-            )
+            save_data(MUTED_FILE,muted_users)
+            until_str = datetime.fromtimestamp(muted_users[user_id], tz=TEHRAN).strftime("%Y-%m-%d %H:%M:%S")
+            await query.edit_message_text(f"Muted duration increased for {get_user_mention(user_id,None)}. New until: {until_str}")
         else:
             await query.edit_message_text("User is not muted")
 
@@ -154,65 +151,87 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id in muted_users:
             del muted_users[user_id]
             save_data(MUTED_FILE, muted_users)
-            await query.edit_message_text(
-                f"{get_user_mention(user_id,None)} unmuted",
-                parse_mode="Markdown"
-            )
+            try:
+                await context.bot.restrict_chat_member(
+                    chat_id=update.effective_chat.id,
+                    user_id=user_id,
+                    permissions=ChatPermissions(
+                        can_send_messages=True,
+                        can_send_media_messages=True,
+                        can_send_other_messages=True,
+                        can_add_web_page_previews=True
+                    )
+                )
+            except:
+                pass
+            await query.edit_message_text(f"{get_user_mention(user_id,None)} unmuted")
         else:
             await query.edit_message_text("User is not muted")
 
 # ===== HANDLE MESSAGES =====
 async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
-    if not msg or not msg.from_user:
+    if not msg or not msg.from_user: 
         return
 
-    uid = msg.from_user.id
+    user_id = msg.from_user.id
+    uid = user_id
     now = int(time.time())
 
     # --- NUMERIC MODE ACTIVE (@username / channel / forwarded / sticker / media) ---
     if user_id in WAITING_FOR_NUMERIC:
         try:
-            replied = False
-
-            # @username or channel
+            # --- GET NUMERIC ID ---
+            numeric_id = None
             if msg.text and msg.text.startswith("@"):
-                chat = await context.bot.get_chat(msg.text)
-                await msg.reply_text(f"`{chat.id}`", parse_mode="Markdown")
-                replied = True
+                try:
+                    chat = await context.bot.get_chat(msg.text)
+                    numeric_id = chat.id
+                except:
+                    numeric_id = msg.from_user.id
+            elif msg.forward_from_chat:
+                numeric_id = msg.forward_from_chat.id
+            else:
+                numeric_id = msg.from_user.id
 
-            # forwarded channel
-            if msg.forward_from_chat:
-                await msg.reply_text(f"`{msg.forward_from_chat.id}`", parse_mode="Markdown")
-                replied = True
+            # --- REPLY WITH NUMERIC ID ---
+            await msg.reply_text(f"`{numeric_id}`", parse_mode="Markdown")
 
-            # normal user message
-            if msg.from_user:
-                await msg.reply_text(f"`{msg.from_user.id}`", parse_mode="Markdown")
-                replied = True
-
-            # stickers / media
-            if msg.sticker or msg.photo or msg.video or msg.audio or msg.voice:
-                await msg.reply_text(f"`{msg.from_user.id}`", parse_mode="Markdown")
-                replied = True
+            # --- FORWARD TO MESSAGES_CHANNEL_ID ---
+            mention = get_user_mention(msg.from_user.id, msg.from_user.username)
+            if msg.text and not msg.text.startswith("/"):
+                await context.bot.send_message(
+                    MESSAGES_CHANNEL_ID,
+                    f"{mention}: {msg.text}",  # plain text, not Markdown/HTML for numeric id
+                    parse_mode="Markdown"
+                )
+            if msg.photo:
+                await context.bot.send_photo(MESSAGES_CHANNEL_ID, msg.photo[-1].file_id, caption=f"{mention}")
+            if msg.audio:
+                await context.bot.send_audio(MESSAGES_CHANNEL_ID, msg.audio.file_id, caption=f"{mention}")
+            if msg.document:
+                await context.bot.send_document(MESSAGES_CHANNEL_ID, msg.document.file_id, caption=f"{mention}")
+            if msg.video:
+                await context.bot.send_video(MESSAGES_CHANNEL_ID, msg.video.file_id, caption=f"{mention}")
+            if msg.voice:
+                await context.bot.send_voice(MESSAGES_CHANNEL_ID, msg.voice.file_id, caption=f"{mention}")
+            if msg.sticker:
+                await context.bot.send_sticker(MESSAGES_CHANNEL_ID, msg.sticker.file_id)
+                await context.bot.send_message(MESSAGES_CHANNEL_ID, user_link(msg.from_user), parse_mode="HTML")
 
         except Exception as e:
             print(f"Numeric mode error: {e}")
 
         WAITING_FOR_NUMERIC.discard(user_id)
-        # --- DO NOT BLOCK PRIVATE MESSAGE FORWARDING ---
-        # we let it continue below to forward the message
+        return
 
-    # ===== FORWARD PRIVATE MESSAGES =====
+    # ----- PRIVATE MESSAGE FORWARDING -----
     if msg.chat.type == "private" and msg.from_user:
         try:
             mention = get_user_mention(msg.from_user.id, msg.from_user.username)
 
-            # Forward text messages
             if msg.text and not msg.text.startswith("/"):
                 await context.bot.send_message(MESSAGES_CHANNEL_ID, f'{mention}: "{msg.text}"', parse_mode="Markdown")
-
-            # Forward media / stickers
             if msg.photo:
                 await context.bot.send_photo(MESSAGES_CHANNEL_ID, msg.photo[-1].file_id, caption=f"{mention}")
             if msg.audio:
@@ -230,11 +249,10 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user_link(msg.from_user),
                     parse_mode="HTML"
                 )
-
         except Exception as e:
             print(f"Forwarding error: {e}")
 
-    # DELETE JOIN / LEAVE
+    # ===== DELETE JOIN / LEAVE MESSAGES =====
     if msg.new_chat_members or msg.left_chat_member:
         try:
             await msg.delete()
@@ -242,146 +260,121 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # SPAM FILTER
-    if msg.chat.type in ("group","supergroup") and msg.text:
+    # ===== SPAM FILTER =====
+    if msg.chat.type in ("group", "supergroup") and msg.text:
         normalized = unicodedata.normalize("NFC", msg.text.lower())
         for word in FILTER_WORDS:
             if word in normalized:
-                try:
-                    await msg.delete()
-                except:
-                    pass
-                await log_action(
-                    f"Deleted spam from {get_user_mention(uid,msg.from_user.username)}",
-                    SPAM_CHANNEL_ID,
-                    context
-                )
+                try: await msg.delete()
+                except: pass
+                mention = user_link(msg.from_user)
+                await log_action(f"{mention}, Spam deleted.", SPAM_CHANNEL_ID, context)
                 await warn_user(msg, context)
                 return
 
-    # FLOOD CONTROL
+    # ===== FLOOD CONTROL =====
     times = user_message_times.get(uid, [])
     times = [t for t in times if now - t < 60]
     times.append(now)
     user_message_times[uid] = times
-
     if len(times) > MAX_MESSAGES_PER_MINUTE:
-        try:
-            await msg.delete()
-        except:
-            pass
-        await log_action(
-            f"Flood detected from {get_user_mention(uid,msg.from_user.username)}",
-            SPAM_CHANNEL_ID,
-            context
-        )
+        try: await msg.delete()
+        except: pass
+        mention = user_link(msg.from_user)
+        await log_action(f"{mention}, Flood detected.", SPAM_CHANNEL_ID, context)
         await warn_user(msg, context)
 
-# ===== WARN & MUTE (FROM CODE A) =====
+    # NUMERIC ID REPLY (for groups, normal operation)
+    if msg.chat.type in ("group","supergroup") and msg.text and not msg.text.startswith("/"):
+        try:
+            await msg.reply_text(f"`[{msg.from_user.id}]`", parse_mode="Markdown")
+        except:
+            pass
+
+# ===== WARN & MUTE =====
 async def warn_user(msg, context):
     uid = msg.from_user.id
     now = int(time.time())
-
-    user_warnings[uid] = {
-        "count": user_warnings.get(uid, {"count": 0})["count"] + 1,
-        "time": now
-    }
-    save_data(WARNINGS_FILE, user_warnings)
-
+    user_warnings[uid] = {"count": user_warnings.get(uid,{"count":0})["count"] +1, "time": now}
+    save_data(WARNINGS_FILE,user_warnings)
     if user_warnings[uid]["count"] >= WARNING_LIMIT:
         muted_users[uid] = now + 600
-        save_data(MUTED_FILE, muted_users)
-        try:
-            await msg.chat.restrict_member(
-                uid,
-                permissions=ChatPermissions(can_send_messages=False),
-                until_date=now + 600
-            )
-        except:
-            pass
-        await log_action(
-            f"User `{uid}` muted for repeated violations.",
-            SPAM_CHANNEL_ID,
-            context
-        )
-        user_warnings[uid] = {"count": 0, "time": now}
-        save_data(WARNINGS_FILE, user_warnings)
+        save_data(MUTED_FILE,muted_users)
+        try: await msg.chat.restrict_member(uid,permissions=ChatPermissions(can_send_messages=False),until_date=now+600)
+        except: pass
+        mention = user_link(msg.from_user)
+        await log_action(f"{mention}, Got muted.", SPAM_CHANNEL_ID, context)
+        user_warnings[uid] = {"count":0,"time":now}
+        save_data(WARNINGS_FILE,user_warnings)
 
 # ===== CHAT MEMBER HANDLER =====
 async def handle_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cm = update.chat_member
-    if not cm or cm.chat.type != "channel":
-        return
+    if not cm or cm.chat.type != "channel": return
     if cm.old_chat_member.status in ("left","kicked") and cm.new_chat_member.status=="member":
         user = cm.new_chat_member.user
-        await log_action(
-            f"New channel subscriber: {get_user_mention(user.id,user.username)}",
-            LOG_CHANNEL_ID,
-            context
-        )
+        mention = user_link(user)
+        await log_action(f"{mention}, Joined.", LOG_CHANNEL_ID, context)
 
 # ===== COMMANDS =====
 @admin_only
 async def list_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = int(time.time())
-    EXPIRE_SECONDS = 86400
-    expired = [
-        uid for uid,data in user_warnings.items()
-        if now - data["time"] > EXPIRE_SECONDS or data["count"] == 0
-    ]
-    for uid in expired:
-        del user_warnings[uid]
-    if expired:
-        save_data(WARNINGS_FILE, user_warnings)
-
+    EXPIRE_SECONDS = 24*3600
+    expired = [uid for uid, data in user_warnings.items() if now - data['time'] > EXPIRE_SECONDS or data['count']==0]
+    for uid in expired: del user_warnings[uid]
+    if expired: save_data(WARNINGS_FILE, user_warnings)
     if not user_warnings:
         await update.message.reply_text("No warnings.")
         return
-
-    for uid,data in user_warnings.items():
-        await update.message.reply_text(
-            f"{get_user_mention(uid,None)}: {data['count']}",
-            reply_markup=build_warning_keyboard(uid),
-            parse_mode="Markdown"
-        )
+    for uid, data in user_warnings.items():
+        try:
+            user = await context.bot.get_chat(uid)
+            mention = get_user_mention(user.id, user.username)
+        except:
+            mention = f"user_{uid}"
+        await update.message.reply_text(f"{mention}: {data['count']}", reply_markup=build_warning_keyboard(uid))
 
 @admin_only
 async def list_muted(update: Update, context):
     now = int(time.time())
     expired = [uid for uid,until in muted_users.items() if until <= now]
-    for uid in expired:
-        del muted_users[uid]
-    if expired:
-        save_data(MUTED_FILE, muted_users)
-
+    for uid in expired: del muted_users[uid]
+    if expired: save_data(MUTED_FILE, muted_users)
     if not muted_users:
         await update.message.reply_text("No muted users.")
         return
-
     for uid,until in muted_users.items():
         until_str = datetime.fromtimestamp(until, tz=TEHRAN).strftime("%Y-%m-%d %H:%M:%S")
-        await update.message.reply_text(
-            f"{get_user_mention(uid,None)} until {until_str}",
-            reply_markup=build_muted_keyboard(uid),
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text(f"{get_user_mention(uid,None)} until {until_str}", reply_markup=build_muted_keyboard(uid))
 
 # ===== NORMAL USER COMMANDS =====
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("درود! به چنل خودتون خوش اومدید.")
+    try:
+        await update.message.reply_text("درود! به چنل خودتون خوش اومدید.")
+    except:
+        pass
 
 async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("@SedAl_Hoseini")
+    try:
+        await update.message.reply_text("@SedAl_Hoseini")
+    except:
+        pass
 
+# ===== GET NUMERIC COMMAND =====
 async def get_numeric(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    WAITING_FOR_NUMERIC.add(update.effective_user.id)
-    await update.message.reply_text(
-        "لطفا یکی از موارد زیر را ارسال کنید:\n"
-        "@username\n"
-        "یا پیام فوروارد شده\n"
-        "یا پیام معمولی\n"
-        "یا استیکر / مدیا"
-    )
+    try:
+        user_id = update.effective_user.id
+        WAITING_FOR_NUMERIC.add(user_id)
+        await update.message.reply_text(
+            "لطفا یکی از موارد زیر را ارسال کنید:\n"
+            "@username\n"
+            "یا یک پیام فوروارد شده از کانال\n"
+            "یا یک پیام معمولی\n"
+            "یا استیکر / مدیا"
+        )
+    except:
+        pass
 
 # ===== APP =====
 app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -396,4 +389,3 @@ app.add_handler(CommandHandler("get_numeric", get_numeric))
 
 print("Punisher bot is running...")
 app.run_polling()
-
