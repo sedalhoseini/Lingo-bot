@@ -24,8 +24,6 @@ FILTER_PATTERNS = re.compile(
 )
 
 TEHRAN = pytz.timezone("Asia/Tehran")
-
-# For detecting repeated messages
 last_user_messages = {}  # {user_id: (text, timestamp)}
 
 # ===== HELPERS =====
@@ -43,8 +41,7 @@ def admin_only(func):
 
 
 def user_link(user):
-    name = user.full_name or "User"
-    return f'<a href="tg://user?id={user.id}">{name}</a>'
+    return f'<a href="tg://user?id={user.id}">{user.full_name or "User"}</a>'
 
 def get_user_mention(user):
     return f"@{user.username}" if user.username else user_link(user)
@@ -60,16 +57,19 @@ async def log_action(text, context, channel_id=LOG_CHANNEL_ID):
 # ===== MEDIA FORWARDING =====
 async def forward_media(msg, channel_id, mention, context):
     try:
+        caption = mention
         if msg.photo:
-            await context.bot.send_photo(channel_id, msg.photo[-1].file_id, caption=mention)
+            await context.bot.send_photo(channel_id, msg.photo[-1].file_id, caption=caption)
         elif msg.video:
-            await context.bot.send_video(channel_id, msg.video.file_id, caption=mention)
-        elif msg.audio:
-            await context.bot.send_audio(channel_id, msg.audio.file_id, caption=mention)
-        elif msg.voice:
-            await context.bot.send_voice(channel_id, msg.voice.file_id, caption=mention)
+            await context.bot.send_video(channel_id, msg.video.file_id, caption=caption)
+        elif msg.animation:
+            await context.bot.send_animation(channel_id, msg.animation.file_id, caption=caption)
         elif msg.document:
-            await context.bot.send_document(channel_id, msg.document.file_id, caption=mention)
+            await context.bot.send_document(channel_id, msg.document.file_id, caption=caption)
+        elif msg.audio:
+            await context.bot.send_audio(channel_id, msg.audio.file_id, caption=caption)
+        elif msg.voice:
+            await context.bot.send_voice(channel_id, msg.voice.file_id, caption=caption)
         elif msg.sticker:
             await context.bot.send_sticker(channel_id, msg.sticker.file_id)
             await context.bot.send_message(channel_id, mention, parse_mode="HTML")
@@ -104,7 +104,7 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = msg.from_user.id
         now = int(time.time())
 
-        # 1️⃣ Keyword / link spam
+        # Keyword / link spam
         if FILTER_PATTERNS.search(normalized):
             try:
                 await msg.delete()
@@ -112,9 +112,9 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
 
-        # 2️⃣ Repeated messages
+        # Repeated messages
         last_msg, last_time = last_user_messages.get(user_id, ("", 0))
-        if normalized == last_msg and now - last_time < 10:  # 10 seconds threshold
+        if normalized == last_msg and now - last_time < 10:  # 10s threshold
             try:
                 await msg.delete()
             except:
@@ -141,11 +141,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Always return custom username
     await update.message.reply_text("@SedAl_Hoseini")
 
 async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
+    user = None
 
     if msg.reply_to_message and msg.reply_to_message.from_user:
         user = msg.reply_to_message.from_user
@@ -172,18 +172,46 @@ async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ===== GROUP MODERATION =====
+async def resolve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Resolve user from reply, username, or numeric ID."""
+    msg = update.message
+    user = None
+
+    # 1️⃣ Reply
+    if msg.reply_to_message and msg.reply_to_message.from_user:
+        user = msg.reply_to_message.from_user
+
+    # 2️⃣ Username or ID in args
+    elif context.args:
+        arg = context.args[0]
+        if arg.startswith("@"):
+            arg = arg[1:]
+        try:
+            user = await context.bot.get_chat(arg)
+        except:
+            try:
+                user_id = int(arg)
+                user = await context.bot.get_chat(user_id)
+            except:
+                await msg.reply_text("Cannot find user.")
+                return None
+    else:
+        await msg.reply_text("You must reply to a user or provide username/ID.")
+        return None
+
+    return user
+
 @admin_only
 async def cmd_mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
-    if not msg.reply_to_message:
-        await msg.reply_text("Reply to the user you want to mute.")
+    user = await resolve_user(update, context)
+    if not user:
         return
 
-    user = msg.reply_to_message.from_user
     duration = 3600  # default 1 hour
-    if context.args:
+    if len(context.args) > 1:
         try:
-            duration = int(context.args[0])  # seconds
+            duration = int(context.args[1])
         except:
             pass
 
@@ -194,25 +222,31 @@ async def cmd_mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             permissions=ChatPermissions(can_send_messages=False),
             until_date=datetime.utcnow() + timedelta(seconds=duration)
         )
-        await msg.reply_text(f"{user_link(user)} has been muted for {duration} seconds.", parse_mode="HTML")
+        await msg.reply_text(f"{user_link(user)} muted for {duration} seconds.", parse_mode="HTML")
     except Exception as e:
         await msg.reply_text(f"Failed to mute: {e}")
 
 @admin_only
 async def cmd_unmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
-    if not msg.reply_to_message:
-        await msg.reply_text("Reply to the user you want to unmute.")
+    user = await resolve_user(update, context)
+    if not user:
         return
-    user = msg.reply_to_message.from_user
+
     try:
         await context.bot.restrict_chat_member(
             chat_id=msg.chat_id,
             user_id=user.id,
-            permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True,
-                                        can_send_polls=True, can_send_other_messages=True,
-                                        can_add_web_page_previews=True, can_change_info=True,
-                                        can_invite_users=True, can_pin_messages=True)
+            permissions=ChatPermissions(
+                can_send_messages=True,
+                can_send_media_messages=True,
+                can_send_polls=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+                can_change_info=True,
+                can_invite_users=True,
+                can_pin_messages=True
+            )
         )
         await msg.reply_text(f"{user_link(user)} has been unmuted.", parse_mode="HTML")
     except Exception as e:
@@ -221,10 +255,9 @@ async def cmd_unmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @admin_only
 async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
-    if not msg.reply_to_message:
-        await msg.reply_text("Reply to the user you want to ban.")
+    user = await resolve_user(update, context)
+    if not user:
         return
-    user = msg.reply_to_message.from_user
     try:
         await context.bot.ban_chat_member(chat_id=msg.chat_id, user_id=user.id)
         await msg.reply_text(f"{user_link(user)} has been banned.", parse_mode="HTML")
@@ -235,7 +268,7 @@ async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not context.args:
-        await msg.reply_text("Provide the user ID to unban.")
+        await msg.reply_text("Provide user ID to unban.")
         return
     try:
         user_id = int(context.args[0])
@@ -263,5 +296,5 @@ app.add_handler(CommandHandler("unban", cmd_unban))
 # ---- MESSAGE HANDLER ----
 app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_messages))
 
-print("Punisher bot with moderation is running...")
+print("Punisher bot with full moderation is running...")
 app.run_polling()
