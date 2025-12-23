@@ -7,10 +7,11 @@ async def debug_echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Error in debug handler: {e}")
 
-app = ApplicationBuilder().token("YOUR_BOT_TOKEN").build()
+app = ApplicationBuilder().token(8537616205:AAHQLsfnbQa-PqxmgouwUWMl4eGKw3LvWKY).build()
 
 # Catch-all handler for any text
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, debug_echo))
 
 print("Debug bot running...")
 app.run_polling()
+
