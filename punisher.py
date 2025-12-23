@@ -90,7 +90,7 @@ async def send_word(update, context, word_row):
             InlineKeyboardButton("Next Word", callback_data="next_word")
         ]
     ]
-    if word_row['pronunciation']:
+    if word_row.get('pronunciation'):
         buttons[0].append(InlineKeyboardButton("🔊 Pronounce", callback_data=f"pron_{word_row['id']}"))
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -286,3 +286,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
