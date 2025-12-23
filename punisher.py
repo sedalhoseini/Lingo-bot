@@ -106,8 +106,19 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ----- PRIVATE MESSAGE FORWARDING -----
-    if msg.photo or msg.video or msg.animation or msg.document or msg.audio or msg.voice or msg.sticker:
-        await forward_media(msg, MESSAGES_CHANNEL_ID, context)
+    if msg.chat.type == "private":
+        # Forward text messages
+        if msg.text and not msg.text.startswith("/"):
+            user_mention = f"@{msg.from_user.username}" if msg.from_user.username else f'<a href="tg://user?id={msg.from_user.id}">{msg.from_user.full_name}</a>'
+            await context.bot.send_message(
+                chat_id=MESSAGES_CHANNEL_ID,
+                text=f"{user_mention}: {msg.text}",
+                parse_mode="HTML"
+            )
+
+        # Forward media messages
+        if msg.photo or msg.video or msg.animation or msg.document or msg.audio or msg.voice or msg.sticker:
+            await forward_media(msg, MESSAGES_CHANNEL_ID, context)
 
     # ----- DELETE JOIN / LEAVE MESSAGES -----
     if msg.new_chat_members or msg.left_chat_member:
@@ -314,6 +325,7 @@ app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_messages))
 
 print("Punisher bot with full moderation is running...")
 app.run_polling()
+
 
 
 
