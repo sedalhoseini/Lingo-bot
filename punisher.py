@@ -3,6 +3,8 @@ import random
 import sqlite3
 import pytz
 from datetime import datetime
+from gtts import gTTS
+from io import BytesIO
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -10,12 +12,13 @@ from telegram.ext import (
     ContextTypes,
     MessageHandler,
     filters,
-    CallbackQueryHandler,
+    ConversationHandler,
+    CallbackQueryHandler
 )
 
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_IDS = {527164608}
+ADMIN_IDS = {527164608}  # your Telegram ID
 DB_PATH = "/opt/punisher-bot/db/daily_words.db"
 DEFAULT_TZ = "Asia/Tehran"
 
@@ -34,23 +37,19 @@ def init_db():
             send_time TEXT,
             last_sent TEXT
         );
-
         CREATE TABLE IF NOT EXISTS words (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             topic TEXT,
             word TEXT,
             definition TEXT,
             example TEXT,
-            pronunciation TEXT,
-            user_added INTEGER DEFAULT 0
+            pronunciation TEXT
         );
-
-        CREATE TABLE IF NOT EXISTS user_words (
+        CREATE TABLE IF NOT EXISTS seen_words (
             user_id INTEGER,
             word_id INTEGER,
-            seen INTEGER DEFAULT 0,
-            learned INTEGER DEFAULT 0,
-            PRIMARY KEY (user_id, word_id)
+            seen_date TEXT,
+            PRIMARY KEY(user_id, word_id)
         );
         """)
 
@@ -63,42 +62,142 @@ def admin_only(func):
         return await func(update, context)
     return wrapper
 
-def pick_word(user_id=None, topic=None):
+def pick_word(topic=None):
     with db() as c:
-        query = "SELECT * FROM words"
-        params = []
         if topic:
-            query += " WHERE topic=?"
-            params.append(topic)
-        query += " ORDER BY RANDOM() LIMIT 1"
-        word = c.execute(query, params).fetchone()
+            row = c.execute(
+                "SELECT * FROM words WHERE topic=? ORDER BY RANDOM() LIMIT 1",
+                (topic,)
+            ).fetchone()
+        else:
+            row = c.execute(
+                "SELECT * FROM words ORDER BY RANDOM() LIMIT 1"
+            ).fetchone()
+        return row
 
-        if word and user_id:
-            # track seen word
-            c.execute(
-                "INSERT OR IGNORE INTO user_words (user_id, word_id, seen) VALUES (?, ?, 1)",
-                (user_id, word["id"])
-            )
-        return word
-
-async def send_word(update: Update, context: ContextTypes.DEFAULT_TYPE, word_row):
+async def send_word(update, context, word_row):
     if not word_row:
-        await update.message.reply_text("No words available.")
+        await update.message.reply_text("No words found.")
         return
-
     text = (
         f"📘 *{word_row['word']}*\n"
         f"{word_row['definition']}\n\n"
         f"_Example:_ {word_row['example']}"
     )
-    if word_row['pronunciation']:
-        text += f"\n\n🔊 Pronunciation: {word_row['pronunciation']}"
-
-    keyboard = [
-        [InlineKeyboardButton("✅ Learned", callback_data=f"learned_{word_row['id']}")],
-        [InlineKeyboardButton("➡️ Next Word", callback_data=f"next_{word_row['id']}")]
+    buttons = [
+        [
+            InlineKeyboardButton("Mark as Seen", callback_data=f"seen_{word_row['id']}"),
+            InlineKeyboardButton("Next Word", callback_data="next_word")
+        ]
     ]
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    if word_row['pronunciation']:
+        buttons[0].append(InlineKeyboardButton("🔊 Pronounce", callback_data=f"pron_{word_row['id']}"))
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+
+async def mark_seen(user_id, word_id):
+    today = datetime.now().strftime("%Y-%m-%d")
+    with db() as c:
+        c.execute(
+            "INSERT OR IGNORE INTO seen_words (user_id, word_id, seen_date) VALUES (?, ?, ?)",
+            (user_id, word_id, today)
+        )
+
+async def send_pronunciation(context, chat_id, word):
+    tts = gTTS(word)
+    bio = BytesIO()
+    tts.write_to_fp(bio)
+    bio.seek(0)
+    await context.bot.send_audio(chat_id=chat_id, audio=bio, filename=f"{word}.mp3")
+
+# ================= STUDENT HANDLERS =================
+START, TOPIC, WORD, DEFN, EXAMPLE, PRON = range(6)
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("Get Random Word", callback_data="random_word")],
+        [InlineKeyboardButton("Review Seen Words", callback_data="review_seen")],
+        [InlineKeyboardButton("Add Personal Word", callback_data="add_personal")]
+    ]
+    await update.message.reply_text(
+        "Welcome! Choose an option:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    user_id = query.from_user.id
+
+    if data == "random_word" or data == "next_word":
+        word = pick_word()
+        await send_word(query, context, word)
+    elif data.startswith("seen_"):
+        word_id = int(data.split("_")[1])
+        await mark_seen(user_id, word_id)
+        await query.edit_message_text("Marked as seen ✅")
+    elif data.startswith("pron_"):
+        word_id = int(data.split("_")[1])
+        with db() as c:
+            row = c.execute("SELECT word FROM words WHERE id=?", (word_id,)).fetchone()
+        if row:
+            await send_pronunciation(context, user_id, row['word'])
+    elif data == "review_seen":
+        with db() as c:
+            rows = c.execute(
+                "SELECT w.* FROM words w JOIN seen_words s ON w.id=s.word_id WHERE s.user_id=?",
+                (user_id,)
+            ).fetchall()
+        if not rows:
+            await query.edit_message_text("You have not seen any words yet.")
+        else:
+            for row in rows:
+                await send_word(query, context, row)
+    elif data == "add_personal":
+        context.user_data['personal'] = {}
+        await query.edit_message_text("Enter the topic for your personal word:")
+        return TOPIC
+
+async def personal_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['personal']['topic'] = update.message.text.strip()
+    await update.message.reply_text("Enter the word:")
+    return WORD
+
+async def personal_word(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['personal']['word'] = update.message.text.strip()
+    await update.message.reply_text("Enter the definition:")
+    return DEFN
+
+async def personal_defn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['personal']['definition'] = update.message.text.strip()
+    await update.message.reply_text("Enter an example sentence:")
+    return EXAMPLE
+
+async def personal_example(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['personal']['example'] = update.message.text.strip()
+    await update.message.reply_text("Optional: Enter pronunciation text (or /skip):")
+    return PRON
+
+async def personal_pron(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    pron = update.message.text.strip()
+    personal = context.user_data['personal']
+    with db() as c:
+        c.execute(
+            "INSERT INTO words (topic, word, definition, example, pronunciation) VALUES (?, ?, ?, ?, ?)",
+            (personal['topic'], personal['word'], personal['definition'], personal['example'], pron)
+        )
+    await update.message.reply_text("✅ Personal word added successfully!")
+    return ConversationHandler.END
+
+async def skip_pron(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    personal = context.user_data['personal']
+    with db() as c:
+        c.execute(
+            "INSERT INTO words (topic, word, definition, example, pronunciation) VALUES (?, ?, ?, ?, ?)",
+            (personal['topic'], personal['word'], personal['definition'], personal['example'], None)
+        )
+    await update.message.reply_text("✅ Personal word added successfully!")
+    return ConversationHandler.END
 
 # ================= DAILY JOB =================
 async def daily_job(context: ContextTypes.DEFAULT_TYPE):
@@ -117,7 +216,7 @@ async def daily_job(context: ContextTypes.DEFAULT_TYPE):
         if u["last_sent"] == today:
             continue
 
-        word = pick_word(u["user_id"])
+        word = pick_word()
         if not word:
             continue
 
@@ -144,167 +243,45 @@ async def daily_job(context: ContextTypes.DEFAULT_TYPE):
 @admin_only
 async def addword(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 4:
-        await update.message.reply_text(
-            "Usage:\n/addword <topic> <word> <definition> <example> [pronunciation]"
-        )
+        await update.message.reply_text("Usage: /addword <topic> <word> <definition> <example>")
         return
-    topic, word, definition = context.args[0], context.args[1], context.args[2]
-    example = context.args[3]
-    pronunciation = " ".join(context.args[4:]) if len(context.args) > 4 else None
-
+    topic, word = context.args[0], context.args[1]
+    definition = context.args[2]
+    example = " ".join(context.args[3:])
     with db() as c:
         c.execute(
-            "INSERT INTO words (topic, word, definition, example, pronunciation) VALUES (?, ?, ?, ?, ?)",
-            (topic, word, definition, example, pronunciation)
+            "INSERT INTO words (topic, word, definition, example) VALUES (?, ?, ?, ?)",
+            (topic, word, definition, example)
         )
-    await update.message.reply_text("Word added.")
-
-@admin_only
-async def bulk_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Send words in this format:\n`topic|word|definition|example|pronunciation`\nOne word per line.",
-        parse_mode="Markdown"
-    )
-
-async def process_bulk_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lines = update.message.text.strip().split("\n")
-    with db() as c:
-        for line in lines:
-            parts = line.split("|")
-            if len(parts) < 4:
-                continue
-            topic, word, definition, example = parts[:4]
-            pronunciation = parts[4] if len(parts) > 4 else None
-            c.execute(
-                "INSERT INTO words (topic, word, definition, example, pronunciation) VALUES (?, ?, ?, ?, ?)",
-                (topic, word, definition, example, pronunciation)
-            )
-    await update.message.reply_text("Bulk words added.")
-
-@admin_only
-async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = " ".join(context.args).strip()
-    if not msg:
-        await update.message.reply_text("Cannot broadcast empty message!")
-        return
-    with db() as c:
-        users = c.execute("SELECT user_id FROM users").fetchall()
-    for u in users:
-        try:
-            await context.bot.send_message(chat_id=u["user_id"], text=msg)
-        except Exception as e:
-            print(f"Failed to send to {u['user_id']}: {e}")
-    await update.message.reply_text("Broadcast sent.")
-
-# ================= STUDENT COMMANDS =================
-async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    send_time = "09:00"
-    tz = DEFAULT_TZ
-
-    for arg in context.args:
-        if arg.startswith("time="):
-            send_time = arg.split("=", 1)[1]
-        elif arg.startswith("tz="):
-            tz = arg.split("=", 1)[1]
-
-    with db() as c:
-        c.execute(
-            "INSERT OR REPLACE INTO users VALUES (?, ?, ?, NULL)",
-            (user_id, tz, send_time)
-        )
-
-    await update.message.reply_text(f"Subscribed.\nTime: {send_time}\nTimezone: {tz}")
-
-async def get_word(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    word = pick_word(user_id)
-    await send_word(update, context, word)
-
-async def review_words(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    with db() as c:
-        rows = c.execute(
-            "SELECT w.word, w.definition, w.example FROM words w "
-            "JOIN user_words uw ON w.id = uw.word_id "
-            "WHERE uw.user_id=? AND uw.learned=1",
-            (user_id,)
-        ).fetchall()
-    if not rows:
-        await update.message.reply_text("No learned words to review.")
-        return
-    text = "📚 *Your Learned Words:*\n\n"
-    for r in rows:
-        text += f"*{r['word']}* - {r['definition']}\n_Example:_ {r['example']}\n\n"
-    await update.message.reply_text(text, parse_mode="Markdown")
-
-async def add_personal_word(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if len(context.args) < 4:
-        await update.message.reply_text(
-            "Usage:\n/addpersonal <topic> <word> <definition> <example> [pronunciation]"
-        )
-        return
-    topic, word, definition = context.args[0], context.args[1], context.args[2]
-    example = context.args[3]
-    pronunciation = " ".join(context.args[4:]) if len(context.args) > 4 else None
-
-    with db() as c:
-        c.execute(
-            "INSERT INTO words (topic, word, definition, example, pronunciation, user_added) VALUES (?, ?, ?, ?, ?, 1)",
-            (topic, word, definition, example, pronunciation)
-        )
-    await update.message.reply_text("Personal word added successfully!")
-
-async def list_topics(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    with db() as c:
-        rows = c.execute("SELECT DISTINCT topic FROM words").fetchall()
-    topics = [r['topic'] for r in rows]
-    await update.message.reply_text("Available topics:\n" + "\n".join(topics))
-
-# ================= CALLBACK HANDLERS =================
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    user_id = query.from_user.id
-
-    if data.startswith("learned_"):
-        word_id = int(data.split("_")[1])
-        with db() as c:
-            c.execute(
-                "INSERT OR REPLACE INTO user_words (user_id, word_id, seen, learned) VALUES (?, ?, 1, 1)",
-                (user_id, word_id)
-            )
-        await query.edit_message_text("Marked as learned ✅")
-    elif data.startswith("next_"):
-        word = pick_word(user_id)
-        await send_word(update, context, word)
+    await update.message.reply_text("✅ Word added successfully!")
 
 # ================= MAIN =================
 def main():
     init_db()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Admin
+    # Student conversation handler for adding personal word
+    personal_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(button_handler, pattern="add_personal")],
+        states={
+            TOPIC: [MessageHandler(filters.TEXT & ~filters.COMMAND, personal_topic)],
+            WORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, personal_word)],
+            DEFN: [MessageHandler(filters.TEXT & ~filters.COMMAND, personal_defn)],
+            EXAMPLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, personal_example)],
+            PRON: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, personal_pron),
+                CommandHandler("skip", skip_pron)
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", lambda u,c: ConversationHandler.END)]
+    )
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(personal_conv)
     app.add_handler(CommandHandler("addword", addword))
-    app.add_handler(CommandHandler("bulk_add", bulk_add))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), process_bulk_text))
-    app.add_handler(CommandHandler("broadcast", broadcast))
 
-    # Student
-    app.add_handler(CommandHandler("subscribe", subscribe))
-    app.add_handler(CommandHandler("get_word", get_word))
-    app.add_handler(CommandHandler("review_words", review_words))
-    app.add_handler(CommandHandler("addpersonal", add_personal_word))
-    app.add_handler(CommandHandler("list_topics", list_topics))
-
-    # Callback for buttons
-    app.add_handler(CallbackQueryHandler(button_callback))
-
-    # Daily job
     app.job_queue.run_repeating(daily_job, interval=60, first=10)
-
     app.run_polling()
 
 if __name__ == "__main__":
