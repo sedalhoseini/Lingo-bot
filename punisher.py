@@ -58,27 +58,29 @@ async def log_action(text, context, channel_id=LOG_CHANNEL_ID):
 async def forward_media(msg, channel_id, context):
     """Forward all media types with captions + user mention."""
     try:
+        # Build caption with mention
         user_mention = f"@{msg.from_user.username}" if msg.from_user.username else f'<a href="tg://user?id={msg.from_user.id}">{msg.from_user.full_name}</a>'
-        caption = f"{user_mention}: {msg.caption}" if msg.caption else user_mention
+        caption = f"{user_mention}: {msg.caption}" if getattr(msg, "caption", None) else user_mention
 
-        if msg.photo:
-            await context.bot.send_photo(channel_id, msg.photo[-1].file_id, caption=caption)
-        elif msg.video:
-            await context.bot.send_video(channel_id, msg.video.file_id, caption=caption)
-        elif msg.animation:
-            await context.bot.send_animation(channel_id, msg.animation.file_id, caption=caption)
-        elif msg.document:
-            await context.bot.send_document(channel_id, msg.document.file_id, caption=caption)
-        elif msg.audio:
-            await context.bot.send_audio(channel_id, msg.audio.file_id, caption=caption)
-        elif msg.voice:
-            await context.bot.send_voice(channel_id, msg.voice.file_id, caption=caption)
-        elif msg.sticker:
+        # Forward each type properly
+        if getattr(msg, "photo", None):
+            await context.bot.send_photo(channel_id, msg.photo[-1].file_id, caption=caption, parse_mode="HTML")
+        elif getattr(msg, "video", None):
+            await context.bot.send_video(channel_id, msg.video.file_id, caption=caption, parse_mode="HTML")
+        elif getattr(msg, "animation", None):
+            await context.bot.send_animation(channel_id, msg.animation.file_id, caption=caption, parse_mode="HTML")
+        elif getattr(msg, "document", None):
+            await context.bot.send_document(channel_id, msg.document.file_id, caption=caption, parse_mode="HTML")
+        elif getattr(msg, "audio", None):
+            await context.bot.send_audio(channel_id, msg.audio.file_id, caption=caption, parse_mode="HTML")
+        elif getattr(msg, "voice", None):
+            await context.bot.send_voice(channel_id, msg.voice.file_id, caption=caption, parse_mode="HTML")
+        elif getattr(msg, "sticker", None):
             await context.bot.send_sticker(channel_id, msg.sticker.file_id)
-            # Send mention separately for sticker
+            # Send mention separately for stickers
             await context.bot.send_message(channel_id, user_mention, parse_mode="HTML")
     except Exception as e:
-        await context.bot.send_message(channel_id, f"Forwarding error: {e}")
+        print(f"Media forwarding error: {e}")
 
 
 # ===== HANDLE MESSAGES =====
@@ -299,4 +301,5 @@ app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_messages))
 
 print("Punisher bot with full moderation is running...")
 app.run_polling()
+
 
