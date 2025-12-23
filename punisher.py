@@ -76,13 +76,12 @@ def pick_word(topic=None):
 
 async def send_word(update_or_query, context, word_row):
     if not word_row:
-        await update_or_query.message.reply_text("No words available.")
+        await update_or_query.message.reply_text("No word found.")
         return
 
-    text = f"📘 *Word of the Day*\n\n" \
-           f"*{word_row['word']}*\n" \
-           f"{word_row['definition']}\n\n" \
-           f"_Example:_ {word_row['example']}"
+    text = f"*Word:* {word_row['word']}\n" \
+           f"*Definition:* {word_row['definition']}\n" \
+           f"*Example:* {word_row['example']}"
 
     # Send text
     if hasattr(update_or_query, "answer"):  # CallbackQuery
@@ -90,7 +89,7 @@ async def send_word(update_or_query, context, word_row):
     else:
         await update_or_query.reply_text(text, parse_mode="Markdown")
 
-    # Send pronunciation safely
+    # Send pronunciation if exists
     pron_url = word_row["pronunciation"] if "pronunciation" in word_row.keys() else None
     if pron_url:
         if hasattr(update_or_query, "answer"):
@@ -280,4 +279,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
