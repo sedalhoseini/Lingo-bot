@@ -266,7 +266,6 @@ async def ai_add(update, context):
 # ================= BULK ADD =================
 async def bulk_add_choice(update, context):
     text = update.message.text
-    uid = update.effective_user.id
 
     if text == "🏠 Cancel":
         await update.message.reply_text(
@@ -304,9 +303,34 @@ async def bulk_add_manual(update, context):
     return ConversationHandler.END
 
 async def bulk_add_ai(update, context):
-    for w in update.message.text.splitlines():
-        update.message.text = w
-        await ai_add(update, context)
+    words = [w.strip() for w in update.message.text.splitlines() if w.strip()]
+
+    with db() as c:
+        for word in words:
+            ai_text = ai_generate_full_word(word)
+            lines = {}
+            for line in ai_text.splitlines():
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    lines[k.strip()] = v.strip()
+
+            c.execute(
+                "INSERT INTO words (topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?)",
+                (
+                    lines.get("TOPIC", "General"),
+                    lines.get("WORD", word),
+                    lines.get("DEFINITION", ""),
+                    lines.get("EXAMPLE", ""),
+                    lines.get("PRONUNCIATION", ""),
+                    lines.get("LEVEL", ""),
+                    lines.get("SOURCE", "AI"),
+                )
+            )
+
+    await update.message.reply_text(
+        "Bulk AI add done.",
+        reply_markup=main_keyboard_bottom(True)
+    )
     return ConversationHandler.END
 
 # ================= LIST =================
