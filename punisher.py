@@ -64,7 +64,7 @@ TOPIC: <topic>
 DEFINITION: <definition>
 EXAMPLE: <example>
 PRONUNCIATION: <IPA or text>
-SOURCE: <text>
+SOURCE: <website>
 Separate each block with '---'.
 """
     r = client.chat.completions.create(
@@ -81,8 +81,26 @@ def main_keyboard_bottom(is_admin=False):
         ["🤖 Add Word (AI)", "📚 My Words"]
     ]
     if is_admin:
-        kb.append(["📦 Bulk Add", "📋 List", "📣 Broadcast", "🗑 Clear Words"])
+        kb.append(["📦 Bulk Add", "📋 List"])
+        kb.append(["📣 Broadcast", "🗑 Clear Words"])
     return ReplyKeyboardMarkup(kb, resize_keyboard=True)
+
+def list_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("By Topic", callback_data="list_topic")],
+        [InlineKeyboardButton("By Level", callback_data="list_level")],
+        [InlineKeyboardButton("Just Words", callback_data="list_words")],
+        [InlineKeyboardButton("🏠 Close List", callback_data="close_list")]
+    ])
+
+def paginate_keyboard(page, total_pages, prefix):
+    kb = []
+    if page > 0:
+        kb.append(InlineKeyboardButton("⬅ Previous", callback_data=f"{prefix}_{page-1}"))
+    if page < total_pages - 1:
+        kb.append(InlineKeyboardButton("Next ➡", callback_data=f"{prefix}_{page+1}"))
+    kb.append(InlineKeyboardButton("🏠 Close", callback_data="close_list"))
+    return InlineKeyboardMarkup([kb])
 
 # ================= HELPERS =================
 async def send_word(chat, row, is_admin=False):
@@ -90,7 +108,7 @@ async def send_word(chat, row, is_admin=False):
         await chat.reply_text("No word found.")
         return
 
-    source_display = row["source"]
+    source_display = row["source"]  # Only display source text without link
 
     text = (
         f"*Word:* {row['word']}\n"
@@ -122,7 +140,6 @@ def pick_word_from_db(topic=None, level=None):
 async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     uid = update.effective_user.id
-    username = update.effective_user.username
 
     # 🎯 Get Word
     if text == "🎯 Get Word":
@@ -147,11 +164,14 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with db() as c:
             words = c.execute("SELECT * FROM personal_words WHERE user_id=?", (uid,)).fetchall()
         if not words:
-            await update.message.reply_text("You have no personal words.", reply_markup=main_keyboard_bottom(uid in ADMIN_IDS))
+            await update.message.reply_text("You have no personal words.")
             return ConversationHandler.END
 
+        page_size = 10
+        total_pages = (len(words) + page_size - 1) // page_size
+        page_words = words[:page_size]
         text_msg = ""
-        for row in words:
+        for row in page_words:
             text_msg += (
                 f"*Word:* {row['word']}\n"
                 f"*Level:* {row['level']}\n"
@@ -160,44 +180,78 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"*Pronunciation:* {row['pronunciation']}\n"
                 f"*Source:* {row['source']}\n\n"
             )
-        await update.message.reply_text(text_msg.strip(), parse_mode="Markdown", reply_markup=main_keyboard_bottom(uid in ADMIN_IDS))
+        await update.message.reply_text(
+            text_msg.strip(),
+            parse_mode="Markdown",
+            reply_markup=paginate_keyboard(0, total_pages, "my_words")
+        )
         return ConversationHandler.END
 
-    # Admin only commands
-    if uid in ADMIN_IDS:
-        if text == "📦 Bulk Add":
-            await update.message.reply_text("Send words in format: topic|level|word|definition|example")
-            return 8
-        if text == "📋 List":
-            # Show words grouped by level/topic for admin
-            with db() as c:
-                words = c.execute("SELECT * FROM personal_words").fetchall()
-            if not words:
-                await update.message.reply_text("No personal words yet.", reply_markup=main_keyboard_bottom(True))
-                return ConversationHandler.END
-            text_msg = ""
-            for row in words:
-                try:
-                    user_row = update.effective_chat.get_member(row["user_id"])
-                    uname = "@" + (user_row.user.username or str(row["user_id"]))
-                except:
-                    uname = str(row["user_id"])
-                text_msg += (
-                    f"{uname}: *{row['word']}* ({row['level']}) - {row['topic']}\n"
-                )
-            await update.message.reply_text(text_msg.strip(), parse_mode="Markdown", reply_markup=main_keyboard_bottom(True))
-            return ConversationHandler.END
-        if text == "📣 Broadcast":
-            await update.message.reply_text("Send message to broadcast:")
-            return 9
-        if text == "🗑 Clear Words":
-            with db() as c:
-                c.execute("DELETE FROM words")
-            await update.message.reply_text("All words cleared.", reply_markup=main_keyboard_bottom(True))
-            return ConversationHandler.END
+    # 📦 Bulk Add (admin)
+    if text == "📦 Bulk Add" and uid in ADMIN_IDS:
+        await update.message.reply_text("Send words in format: topic|level|word|definition|example")
+        return 8
+
+    # 📋 List (admin)
+    if text == "📋 List" and uid in ADMIN_IDS:
+        await update.message.reply_text("Choose list type:", reply_markup=list_keyboard())
+        return ConversationHandler.END
+
+    # 📣 Broadcast (admin)
+    if text == "📣 Broadcast" and uid in ADMIN_IDS:
+        await update.message.reply_text("Send message to broadcast:")
+        return 9
+
+    # 🗑 Clear Words (admin)
+    if text == "🗑 Clear Words" and uid in ADMIN_IDS:
+        with db() as c:
+            c.execute("DELETE FROM words")
+        await update.message.reply_text("All words cleared.", reply_markup=main_keyboard_bottom(True))
+        return ConversationHandler.END
 
     # fallback
     await update.message.reply_text("Unknown action.", reply_markup=main_keyboard_bottom(uid in ADMIN_IDS))
+    return ConversationHandler.END
+
+# ================= BUTTON HANDLER =================
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+    d = q.data
+
+    if d == "close_list":
+        await q.message.delete()
+        return ConversationHandler.END
+
+    # MY WORDS PAGINATION
+    if d.startswith("my_words"):
+        page = int(d.split("_")[2]) if len(d.split("_")) > 2 else 0
+        with db() as c:
+            words = c.execute("SELECT * FROM personal_words WHERE user_id=? ORDER BY id", (uid,)).fetchall()
+        if not words:
+            await q.message.edit_text("You have no personal words.")
+            return ConversationHandler.END
+
+        page_size = 10
+        total_pages = (len(words) + page_size - 1) // page_size
+        start = page * page_size
+        end = start + page_size
+        page_words = words[start:end]
+
+        text = ""
+        for row in page_words:
+            text += (
+                f"*Word:* {row['word']}\n"
+                f"*Level:* {row['level']}\n"
+                f"*Definition:* {row['definition']}\n"
+                f"*Example:* {row['example']}\n"
+                f"*Pronunciation:* {row['pronunciation']}\n"
+                f"*Source:* {row['source']}\n\n"
+            )
+        await q.message.edit_text(text.strip(), parse_mode="Markdown", reply_markup=paginate_keyboard(page, total_pages, "my_words"))
+        return ConversationHandler.END
+
     return ConversationHandler.END
 
 # ================= MANUAL ADD =================
@@ -216,7 +270,7 @@ async def manual_add(update, context):
             }[f]
             await update.message.reply_text(next_prompt)
             return fields.index(f)+1
-    return 5  # go to pronunciation step
+    return ConversationHandler.END
 
 async def save_pron(update, context):
     pron = update.message.text or "Audio received"
@@ -224,7 +278,7 @@ async def save_pron(update, context):
     uid = update.effective_user.id
     with db() as c:
         c.execute(
-            "INSERT INTO personal_words VALUES (NULL,?,?,?,?,?,?,?,?)",
+            "INSERT INTO personal_words (user_id, topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?,?)",
             (uid, d["topic"], d["word"], d["definition"], d["example"], pron, d["level"], "Manual")
         )
     await update.message.reply_text("Word saved.", reply_markup=main_keyboard_bottom(uid in ADMIN_IDS))
@@ -234,8 +288,8 @@ async def save_pron(update, context):
 # ================= AI ADD =================
 async def ai_add(update, context):
     word = update.message.text.strip()
-    added_count = 0
     uid = update.effective_user.id
+    added_count = 0
     try:
         ai_text = ai_generate_full_word(word)
     except Exception:
@@ -264,7 +318,7 @@ async def ai_add(update, context):
 
     with db() as c:
         c.execute(
-            "INSERT INTO personal_words VALUES (NULL,?,?,?,?,?,?,?,?)",
+            "INSERT INTO personal_words (user_id, topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?,?)",
             (uid, topic_val, word_val, definition_val, example_val, pronunciation_val, level_val, source_val)
         )
         added_count += 1
@@ -280,7 +334,7 @@ async def bulk_add(update, context):
             try:
                 t, lv, w, d, e = l.split("|")
                 c.execute(
-                    "INSERT INTO words VALUES (NULL,?,?,?,?,?,?,?)",
+                    "INSERT INTO words (topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?)",
                     (t, w, d, e, "", lv, "Bulk")
                 )
                 ok += 1
@@ -338,10 +392,9 @@ def main():
         },
         fallbacks=[]
     )
-
+    
     app.add_handler(conv)
-    app.add_handler(CallbackQueryHandler(lambda u, c: None))  # kept placeholder if needed
-
+    app.add_handler(CallbackQueryHandler(button_handler))
     app.run_polling()
 
 if __name__ == "__main__":
