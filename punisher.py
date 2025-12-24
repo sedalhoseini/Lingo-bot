@@ -415,8 +415,7 @@ def main():
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, main_menu_handler),
-            CallbackQueryHandler(button_handler)
+            MessageHandler(filters.TEXT & ~filters.COMMAND, main_menu_handler)
         ],
         states={
             0: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_add)],
@@ -431,9 +430,13 @@ def main():
         },
         fallbacks=[]
     )
+    
     app.add_handler(conv)
+    app.add_handler(CallbackQueryHandler(button_handler))  # add separately
+
     app.run_polling()
 
 if __name__ == "__main__":
     main()
+
 
