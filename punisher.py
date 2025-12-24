@@ -79,7 +79,7 @@ def ai_generate_full_word(word: str):
     )
 
     r = client.chat.completions.create(
-        model="llama3-8b-8192",
+        model="llama3-13b",  # <- updated model
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3,
     )
@@ -87,28 +87,9 @@ def ai_generate_full_word(word: str):
     return r.choices[0].message.content.strip()
 
 # ================= HELPERS =================
-def pick_word(topic=None, level=None):
-    with db() as c:
-        q = "SELECT * FROM words"
-        params = []
-
-        if topic or level:
-            q += " WHERE"
-        if topic:
-            q += " topic=?"
-            params.append(topic)
-        if level:
-            if topic:
-                q += " AND"
-            q += " level=?"
-            params.append(level)
-
-        q += " ORDER BY RANDOM() LIMIT 1"
-        return c.execute(q, params).fetchone()
-
 async def send_word(chat, row):
     if not row:
-        await chat.send_message("No word found.")
+        await chat.reply_text("No word found.")  # <- fixed
         return
 
     text = (
@@ -119,7 +100,21 @@ async def send_word(chat, row):
         f"*Pronunciation:* {row['pronunciation']}"
     )
 
-    await chat.send_message(text, parse_mode="Markdown")
+    await chat.reply_text(text, parse_mode="Markdown")  # <- fixed
+
+# ================= START =================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    with db() as c:
+        c.execute(
+            "INSERT OR IGNORE INTO users (user_id) VALUES (?)",  # <- fixed insert
+            (uid,)
+        )
+    await update.message.reply_text(
+        "Main Menu:",
+        reply_markup=main_keyboard(uid in ADMIN_IDS)
+    )
+    return ConversationHandler.END
 
 # ================= KEYBOARDS =================
 def main_keyboard(is_admin=False):
@@ -338,4 +333,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
