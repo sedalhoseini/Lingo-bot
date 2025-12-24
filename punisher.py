@@ -273,18 +273,28 @@ async def save_pron(update, context):
 # ================= AI ADD =================
 async def ai_add(update, context):
     word = update.message.text.strip()
-    ai_text = ai_generate_full_word(word)
+    
+    # Call AI to generate full word info
+    try:
+        ai_text = ai_generate_full_word(word)
+    except Exception as e:
+        await update.message.reply_text(f"AI generation failed: {e}")
+        return ConversationHandler.END
 
-    blocks = ai_text.split("---")
+    # Split multiple entries if AI returned more than one part of speech
+    blocks = [b.strip() for b in ai_text.split("---") if b.strip()]
+    added_count = 0
+
     with db() as c:
         for b in blocks:
+            # Parse each line in the AI output
             lines = {}
-            for l in b.splitlines():
-                if ":" in l:
-                    k, v = l.split(":", 1)
-                    lines[k.strip().upper()] = v.strip()
-
-            # Ensure proper mapping
+            for line in b.splitlines():
+                if ":" in line:
+                    key, value = line.split(":", 1)
+                    lines[key.strip().upper()] = value.strip()
+            
+            # Map AI keys to DB fields
             topic = lines.get("TOPIC", "General")
             level = lines.get("LEVEL", "N/A")
             word_val = lines.get("WORD", word)
@@ -292,12 +302,14 @@ async def ai_add(update, context):
             example = lines.get("EXAMPLE", "")
             pronunciation = lines.get("PRONUNCIATION", "")
 
+            # Insert into database
             c.execute(
                 "INSERT INTO words VALUES (NULL,?,?,?,?,?,?)",
                 (topic, level, word_val, definition, example, pronunciation)
             )
+            added_count += 1
 
-    await update.message.reply_text("AI word(s) added successfully.")
+    await update.message.reply_text(f"AI word(s) added successfully. Total added: {added_count}")
     return ConversationHandler.END
 
 # ================= BULK =================
@@ -359,6 +371,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
