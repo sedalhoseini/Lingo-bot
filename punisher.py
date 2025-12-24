@@ -310,6 +310,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return ConversationHandler.END
 
+# ================= BULK ADD =================
+async def bulk_add(update, context):
+    ok = 0
+    with db() as c:
+        for l in update.message.text.splitlines():
+            try:
+                t, lv, w, d, e = l.split("|")
+                c.execute(
+                    "INSERT INTO words VALUES (NULL,?,?,?,?,?,?,?)",
+                    (t.strip(), w.strip(), d.strip(), e.strip(), "", lv.strip(), "Bulk")
+                )
+                ok += 1
+            except:
+                continue
+    await update.message.reply_text(f"Added {ok} words.", reply_markup=main_menu(True))
+    return ConversationHandler.END
+
 # ================= MANUAL ADD =================
 async def manual_add(update, context):
     text = update.message.text.strip()
@@ -429,3 +446,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
