@@ -2,18 +2,28 @@ import os
 import sqlite3
 import asyncio
 import pytz
+import textwrap
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from groq import Groq
+
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup
+)
 from telegram.ext import (
-    ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler,
-    ConversationHandler, MessageHandler, filters
+    ApplicationBuilder, ContextTypes, CommandHandler,
+    CallbackQueryHandler, ConversationHandler,
+    MessageHandler, filters
 )
 
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_IDS = {527164608}  # Add more admins if needed
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+ADMIN_IDS = {527164608}
 DB_PATH = "/opt/punisher-bot/db/daily_words.db"
 DEFAULT_TZ = "Asia/Tehran"
+
+client = Groq(api_key=GROQ_API_KEY)
 
 # ================= DATABASE =================
 def db():
@@ -32,6 +42,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS words (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             topic TEXT,
+            level TEXT,
             word TEXT,
             definition TEXT,
             example TEXT,
@@ -42,6 +53,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             topic TEXT,
+            level TEXT,
             word TEXT,
             definition TEXT,
             example TEXT,
@@ -49,275 +61,275 @@ def init_db():
         );
         """)
 
+# ================= AI =================
+def ai_generate_full_word(word: str):
+    prompt = (
+        "You are an English linguist.\n\n"
+        f'For the word: "{word}"\n\n'
+        "Return ALL parts of speech if multiple exist.\n\n"
+        "Format STRICTLY like this:\n"
+        "LEVEL: A1/A2/B1/B2/C1/C2\n"
+        "TOPIC: ...\n"
+        "WORD: ...\n"
+        "DEFINITION: ...\n"
+        "EXAMPLE: ...\n"
+        "PRONUNCIATION: IPA or text\n"
+        "---\n"
+        "(repeat if another part of speech exists)"
+    )
+
+    r = client.chat.completions.create(
+        model="llama3-8b-8192",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+    )
+
+    return r.choices[0].message.content.strip()
+
 # ================= HELPERS =================
-def pick_word(topic=None):
+def pick_word(topic=None, level=None):
     with db() as c:
+        q = "SELECT * FROM words"
+        params = []
+
+        if topic or level:
+            q += " WHERE"
         if topic:
-            row = c.execute("SELECT * FROM words WHERE topic=? ORDER BY RANDOM() LIMIT 1", (topic,)).fetchone()
-        else:
-            row = c.execute("SELECT * FROM words ORDER BY RANDOM() LIMIT 1").fetchone()
-        return row
+            q += " topic=?"
+            params.append(topic)
+        if level:
+            if topic:
+                q += " AND"
+            q += " level=?"
+            params.append(level)
 
-def fetch_pronunciation(word):
-    """
-    Placeholder: Replace with AI/dictionary API call to get pronunciation audio URL
-    """
-    return None  # Example: return "https://.../audio.mp3"
+        q += " ORDER BY RANDOM() LIMIT 1"
+        return c.execute(q, params).fetchone()
 
-async def send_word(chat, word_row):
-    if not word_row:
+async def send_word(chat, row):
+    if not row:
         await chat.send_message("No word found.")
         return
-    text = f"*Word:* {word_row['word']}\n*Definition:* {word_row['definition']}\n*Example:* {word_row['example']}"
+
+    text = (
+        f"*Word:* {row['word']}\n"
+        f"*Level:* {row['level']}\n"
+        f"*Definition:* {row['definition']}\n"
+        f"*Example:* {row['example']}\n"
+        f"*Pronunciation:* {row['pronunciation']}"
+    )
+
     await chat.send_message(text, parse_mode="Markdown")
-    if word_row.get("pronunciation"):
-        await chat.send_audio(word_row["pronunciation"])
 
 # ================= KEYBOARDS =================
-def admin_keyboard():
-    keyboard = [
-        [InlineKeyboardButton("Add Word", callback_data="admin_add")],
-        [InlineKeyboardButton("Bulk Add", callback_data="admin_bulk")],
-        [InlineKeyboardButton("Pick Word", callback_data="pick_word")],
-        [InlineKeyboardButton("Clear Words", callback_data="admin_clear")],
-        [InlineKeyboardButton("List Topics", callback_data="admin_topics")],
-        [InlineKeyboardButton("List Words", callback_data="admin_words")],
-        [InlineKeyboardButton("List Subscribers", callback_data="admin_users")],
-        [InlineKeyboardButton("Broadcast", callback_data="admin_broadcast")]
+def main_keyboard(is_admin=False):
+    kb = [
+        [InlineKeyboardButton("🎯 Get Word", callback_data="pick_word")],
+        [InlineKeyboardButton("➕ Add Word (Manual)", callback_data="add_manual")],
+        [InlineKeyboardButton("🤖 Add Word (AI)", callback_data="add_ai")],
+        [InlineKeyboardButton("📚 My Words", callback_data="my_words")],
     ]
-    return InlineKeyboardMarkup(keyboard)
+    if is_admin:
+        kb += [
+            [InlineKeyboardButton("📦 Bulk Add", callback_data="bulk_add")],
+            [InlineKeyboardButton("📋 List", callback_data="admin_list")],
+            [InlineKeyboardButton("📣 Broadcast", callback_data="broadcast")],
+            [InlineKeyboardButton("🗑 Clear Words", callback_data="clear_words")],
+        ]
+    return InlineKeyboardMarkup(kb)
 
-def student_keyboard():
-    keyboard = [
-        [InlineKeyboardButton("Get Random Word", callback_data="pick_word")],
-        [InlineKeyboardButton("Add Personal Word", callback_data="personal_add")],
-        [InlineKeyboardButton("My Words", callback_data="my_words")],
-        [InlineKeyboardButton("Set Daily Word Time", callback_data="set_daily_time")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+def list_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("By Topic", callback_data="list_topic")],
+        [InlineKeyboardButton("By Level", callback_data="list_level")],
+        [InlineKeyboardButton("Just Words", callback_data="list_words")],
+    ])
 
 # ================= STATES =================
-ADD_TOPIC, ADD_WORD, ADD_DEFINITION, ADD_EXAMPLE, ADD_PRON, BULK_ADD, BROADCAST, DAILY_TIME = range(8)
+(
+    ADD_TOPIC, ADD_LEVEL, ADD_WORD, ADD_DEF, ADD_EX,
+    ADD_PRON, AI_WORD, BULK_ADD, BROADCAST
+) = range(9)
 
 # ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    uid = update.effective_user.id
     with db() as c:
-        c.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-    if user_id in ADMIN_IDS:
-        await update.message.reply_text("Welcome Admin! Choose an option:", reply_markup=admin_keyboard())
-    else:
-        await update.message.reply_text("Welcome! Choose an option:", reply_markup=student_keyboard())
+        c.execute("INSERT OR IGNORE INTO users VALUES (?, NULL)", (uid,))
+    await update.message.reply_text(
+        "Main Menu:",
+        reply_markup=main_keyboard(uid in ADMIN_IDS)
+    )
     return ConversationHandler.END
 
 # ================= BUTTON HANDLER =================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    data = query.data
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+    d = q.data
 
-    # ---------------- ADMIN ----------------
-    if user_id in ADMIN_IDS:
-        if data == "admin_add":
-            context.user_data["add_mode"] = "single"
-            await query.message.reply_text("Send topic for the new word:")
-            return ADD_TOPIC
-        elif data == "admin_bulk":
-            context.user_data["add_mode"] = "bulk"
-            await query.message.reply_text("Send words in bulk: topic|word|definition|example per line")
-            return BULK_ADD
-        elif data == "pick_word":
-            word = pick_word()
-            await send_word(query.message, word)
-            return ConversationHandler.END
-        elif data == "admin_clear":
-            with db() as c:
-                c.execute("DELETE FROM words")
-            await query.message.reply_text("All words cleared!")
-        elif data == "admin_topics":
-            with db() as c:
-                topics = c.execute("SELECT DISTINCT topic FROM words").fetchall()
-            await query.message.reply_text("\n".join([t["topic"] for t in topics]) or "No topics.")
-        elif data == "admin_words":
-            with db() as c:
-                words = c.execute("SELECT word FROM words").fetchall()
-            await query.message.reply_text("\n".join([w["word"] for w in words]) or "No words.")
-        elif data == "admin_users":
-            with db() as c:
-                users = c.execute("SELECT user_id FROM users").fetchall()
-            await query.message.reply_text("Subscribers:\n" + "\n".join([str(u["user_id"]) for u in users]))
-        elif data == "admin_broadcast":
-            await query.message.reply_text("Send broadcast message:")
-            return BROADCAST
-    # ---------------- STUDENT ----------------
-    else:
-        if data == "pick_word":
-            word = pick_word()
-            await send_word(query.message, word)
-            return ConversationHandler.END
-        elif data == "personal_add":
-            context.user_data["add_mode"] = "personal"
-            await query.message.reply_text("Send topic for your personal word:")
-            return ADD_TOPIC
-        elif data == "my_words":
-            with db() as c:
-                words = c.execute("SELECT * FROM personal_words WHERE user_id=?", (user_id,)).fetchall()
-            if words:
-                msg = "\n".join([f"{w['word']} ({w['topic']})" for w in words])
-            else:
-                msg = "No personal words added."
-            await query.message.reply_text(msg)
-        elif data == "set_daily_time":
-            await query.message.reply_text("Send the time to receive daily word in HH:MM (24h) format:")
-            return DAILY_TIME
+    if d == "pick_word":
+        w = pick_word()
+        await send_word(q.message, w)
+
+    elif d == "add_manual":
+        context.user_data.clear()
+        await q.message.reply_text("Topic?")
+        return ADD_TOPIC
+
+    elif d == "add_ai":
+        await q.message.reply_text("Send the word only:")
+        return AI_WORD
+
+    elif d == "bulk_add":
+        await q.message.reply_text("Send bulk lines: topic|level|word|definition|example")
+        return BULK_ADD
+
+    elif d == "admin_list":
+        await q.message.reply_text("Choose list type:", reply_markup=list_keyboard())
+
+    elif d == "list_words":
+        with db() as c:
+            w = c.execute("SELECT word FROM words").fetchall()
+        await q.message.reply_text("\n".join([x["word"] for x in w]) or "Empty")
+
+    elif d == "list_level":
+        with db() as c:
+            l = c.execute("SELECT DISTINCT level FROM words").fetchall()
+        await q.message.reply_text("\n".join([x["level"] for x in l]) or "Empty")
+
+    elif d == "list_topic":
+        with db() as c:
+            t = c.execute("SELECT DISTINCT topic FROM words").fetchall()
+        await q.message.reply_text("\n".join([x["topic"] for x in t]) or "Empty")
+
+    elif d == "clear_words" and uid in ADMIN_IDS:
+        with db() as c:
+            c.execute("DELETE FROM words")
+        await q.message.reply_text("All words cleared.")
+
+    elif d == "broadcast":
+        await q.message.reply_text("Send broadcast message:")
+        return BROADCAST
 
     return ConversationHandler.END
 
-# ================= ADD WORD FLOW =================
-async def add_word_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    mode = context.user_data.get("add_mode")
+# ================= MANUAL ADD =================
+async def manual_add(update, context):
     text = update.message.text.strip()
 
-    if mode in ["single", "personal"]:
-        if "topic" not in context.user_data:
-            context.user_data["topic"] = text
-            await update.message.reply_text("Send the word:")
-            return ADD_WORD
-        elif "word" not in context.user_data:
-            context.user_data["word"] = text
-            await update.message.reply_text("Send the definition:")
-            return ADD_DEFINITION
-        elif "definition" not in context.user_data:
-            context.user_data["definition"] = text
-            await update.message.reply_text("Send an example sentence:")
-            return ADD_EXAMPLE
-        elif "example" not in context.user_data:
-            context.user_data["example"] = text
-            await update.message.reply_text("Send pronunciation audio URL (or type 'skip'):")
-            return ADD_PRON
-    elif mode == "bulk":
-        lines = text.splitlines()
-        success, failed = 0, 0
-        with db() as c:
-            for line in lines:
-                try:
-                    parts = line.split("|")
-                    if len(parts) < 4:
-                        failed += 1
-                        continue
-                    topic, word, definition, example = parts[:4]
-                    pron = parts[4] if len(parts) >= 5 else fetch_pronunciation(word)
-                    c.execute("INSERT INTO words (topic, word, definition, example, pronunciation) VALUES (?, ?, ?, ?, ?)",
-                              (topic, word, definition, example, pron))
-                    success += 1
-                except:
-                    failed += 1
-        await update.message.reply_text(f"Bulk add finished. Success: {success}, Failed: {failed}")
-        context.user_data.clear()
-        return ConversationHandler.END
-    return ADD_PRON
+    if "topic" not in context.user_data:
+        context.user_data["topic"] = text
+        await update.message.reply_text("Level?")
+        return ADD_LEVEL
+    if "level" not in context.user_data:
+        context.user_data["level"] = text
+        await update.message.reply_text("Word?")
+        return ADD_WORD
+    if "word" not in context.user_data:
+        context.user_data["word"] = text
+        await update.message.reply_text("Definition?")
+        return ADD_DEF
+    if "definition" not in context.user_data:
+        context.user_data["definition"] = text
+        await update.message.reply_text("Example?")
+        return ADD_EX
+    if "example" not in context.user_data:
+        context.user_data["example"] = text
+        await update.message.reply_text("Send pronunciation text or audio:")
+        return ADD_PRON
 
-# ================= ADD PRON =================
-async def add_pron(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    pron = update.message.text.strip()
-    if pron.lower() == "skip":
-        pron = fetch_pronunciation(context.user_data["word"])
-
-    topic = context.user_data["topic"]
-    word = context.user_data["word"]
-    definition = context.user_data["definition"]
-    example = context.user_data["example"]
-    user_id = update.effective_user.id
-
+async def save_pron(update, context):
+    pron = update.message.text if update.message.text else "Audio received"
+    d = context.user_data
     with db() as c:
-        if context.user_data.get("add_mode") == "personal":
-            c.execute("INSERT INTO personal_words (user_id, topic, word, definition, example, pronunciation) VALUES (?, ?, ?, ?, ?, ?)",
-                      (user_id, topic, word, definition, example, pron))
-        else:
-            c.execute("INSERT INTO words (topic, word, definition, example, pronunciation) VALUES (?, ?, ?, ?, ?)",
-                      (topic, word, definition, example, pron))
-
-    await update.message.reply_text(f"Word '{word}' added successfully!")
+        c.execute(
+            "INSERT INTO words VALUES (NULL,?,?,?,?,?,?)",
+            (d["topic"], d["level"], d["word"], d["definition"], d["example"], pron)
+        )
+    await update.message.reply_text("Word saved.")
     context.user_data.clear()
     return ConversationHandler.END
 
-# ================= BROADCAST =================
-async def broadcast_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message.text.strip()
-    if not msg:
-        await update.message.reply_text("Cannot send empty message.")
-        return ConversationHandler.END
+# ================= AI ADD =================
+async def ai_add(update, context):
+    word = update.message.text.strip()
+    ai_text = ai_generate_full_word(word)
 
+    blocks = ai_text.split("---")
+    with db() as c:
+        for b in blocks:
+            lines = {l.split(":",1)[0]:l.split(":",1)[1].strip() for l in b.splitlines() if ":" in l}
+            c.execute(
+                "INSERT INTO words VALUES (NULL,?,?,?,?,?,?)",
+                (
+                    lines.get("TOPIC"),
+                    lines.get("LEVEL"),
+                    lines.get("WORD"),
+                    lines.get("DEFINITION"),
+                    lines.get("EXAMPLE"),
+                    lines.get("PRONUNCIATION"),
+                )
+            )
+
+    await update.message.reply_text("AI word(s) added successfully.")
+    return ConversationHandler.END
+
+# ================= BULK =================
+async def bulk_add(update, context):
+    ok = 0
+    with db() as c:
+        for l in update.message.text.splitlines():
+            try:
+                t, lv, w, d, e = l.split("|")
+                c.execute(
+                    "INSERT INTO words VALUES (NULL,?,?,?,?,?,?)",
+                    (t, lv, w, d, e, "")
+                )
+                ok += 1
+            except:
+                pass
+    await update.message.reply_text(f"Added {ok} words.")
+    return ConversationHandler.END
+
+# ================= BROADCAST =================
+async def broadcast(update, context):
+    msg = update.message.text
     with db() as c:
         users = c.execute("SELECT user_id FROM users").fetchall()
-
-    sent = 0
     for u in users:
         try:
-            await context.bot.send_message(chat_id=u["user_id"], text=msg)
-            sent += 1
+            await context.bot.send_message(u["user_id"], msg)
         except:
-            continue
-
-    await update.message.reply_text(f"Broadcast sent to {sent} users.")
+            pass
+    await update.message.reply_text("Broadcast sent.")
     return ConversationHandler.END
-
-# ================= SET DAILY TIME =================
-async def set_daily_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    time_text = update.message.text.strip()
-    try:
-        datetime.strptime(time_text, "%H:%M")
-        with db() as c:
-            c.execute("UPDATE users SET daily_time=? WHERE user_id=?", (time_text, user_id))
-        await update.message.reply_text(f"Daily word time set to {time_text}")
-    except:
-        await update.message.reply_text("Invalid format. Use HH:MM (24h).")
-    return ConversationHandler.END
-
-# ================= DAILY WORD TASK =================
-async def daily_word_task(app):
-    while True:
-        now_utc = datetime.utcnow()
-        with db() as c:
-            users = c.execute("SELECT user_id, daily_time FROM users WHERE daily_time IS NOT NULL").fetchall()
-        for u in users:
-            tz = pytz.timezone(DEFAULT_TZ)
-            now_local = now_utc.astimezone(tz)
-            if u["daily_time"] == now_local.strftime("%H:%M"):
-                word = pick_word()
-                if word:
-                    chat = await app.bot.get_chat(u["user_id"])
-                    await send_word(chat, word)
-        await asyncio.sleep(60)
 
 # ================= MAIN =================
 def main():
     init_db()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start), CallbackQueryHandler(button_handler)],
+    conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(button_handler), CommandHandler("start", start)],
         states={
-            ADD_TOPIC: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_word_flow)],
-            ADD_WORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_word_flow)],
-            ADD_DEFINITION: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_word_flow)],
-            ADD_EXAMPLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_word_flow)],
-            ADD_PRON: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_pron)],
-            BULK_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_word_flow)],
-            BROADCAST: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_flow)],
-            DAILY_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_daily_time)],
+            ADD_TOPIC: [MessageHandler(filters.TEXT, manual_add)],
+            ADD_LEVEL: [MessageHandler(filters.TEXT, manual_add)],
+            ADD_WORD: [MessageHandler(filters.TEXT, manual_add)],
+            ADD_DEF: [MessageHandler(filters.TEXT, manual_add)],
+            ADD_EX: [MessageHandler(filters.TEXT, manual_add)],
+            ADD_PRON: [MessageHandler(filters.ALL, save_pron)],
+            AI_WORD: [MessageHandler(filters.TEXT, ai_add)],
+            BULK_ADD: [MessageHandler(filters.TEXT, bulk_add)],
+            BROADCAST: [MessageHandler(filters.TEXT, broadcast)],
         },
-        fallbacks=[]
+        fallbacks=[],
+        allow_reentry=True
     )
 
-    app.add_handler(conv_handler)
-    app.add_handler(CallbackQueryHandler(button_handler))
-
-    # Start daily word scheduler
-    loop = asyncio.get_event_loop()
-    loop.create_task(daily_word_task(app))
+    app.add_handler(conv)
+    app.add_handler(CommandHandler("start", start))
 
     app.run_polling()
 
