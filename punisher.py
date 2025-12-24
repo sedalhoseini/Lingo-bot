@@ -93,7 +93,11 @@ def add_word_choice_keyboard():
 
 def list_keyboard_bottom():
     return ReplyKeyboardMarkup(
-        [["Words", "My Words"], ["🧹 Clear My Words"], ["🏠 Cancel"]],
+        [
+            ["Words", "My Words"],
+            ["🧹 Clear My Words"],
+            ["🏠 Cancel"]
+        ],
         resize_keyboard=True
     )
 
@@ -182,12 +186,14 @@ async def list_handler(update, context):
 
     with db() as c:
         if text == "Words":
-            rows = c.execute("SELECT word FROM words LIMIT 30").fetchall()
+            rows = c.execute(
+                "SELECT word FROM words LIMIT 30"
+            ).fetchall()
             msg = "\n".join(r["word"] for r in rows)
 
         elif text == "My Words":
             rows = c.execute(
-                "SELECT word FROM personal_words WHERE user_id=? ORDER BY id DESC LIMIT 30",
+                "SELECT word FROM personal_words WHERE user_id=? LIMIT 30",
                 (uid,)
             ).fetchall()
             msg = "\n".join(r["word"] for r in rows)
