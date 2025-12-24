@@ -79,7 +79,7 @@ def ai_generate_full_word(word: str):
     )
 
     r = client.chat.completions.create(
-        model="llama3-13b",  # <- updated model
+        model="llama-3.1-8b-instant",  # <- updated model
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3,
     )
@@ -159,6 +159,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard(uid in ADMIN_IDS)
     )
     return ConversationHandler.END
+
+# ================= HELPERS =================
+def pick_word(topic=None, level=None):
+    with db() as c:
+        q = "SELECT * FROM words"
+        params = []
+
+        if topic or level:
+            q += " WHERE"
+        if topic:
+            q += " topic=?"
+            params.append(topic)
+        if level:
+            if topic:
+                q += " AND"
+            q += " level=?"
+            params.append(level)
+
+        q += " ORDER BY RANDOM() LIMIT 1"
+        return c.execute(q, params).fetchone()
 
 # ================= BUTTON HANDLER =================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -333,5 +353,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
