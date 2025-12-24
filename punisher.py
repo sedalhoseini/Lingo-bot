@@ -278,17 +278,23 @@ async def ai_add(update, context):
     blocks = ai_text.split("---")
     with db() as c:
         for b in blocks:
-            lines = {l.split(":",1)[0]:l.split(":",1)[1].strip() for l in b.splitlines() if ":" in l}
+            lines = {}
+            for l in b.splitlines():
+                if ":" in l:
+                    k, v = l.split(":", 1)
+                    lines[k.strip().upper()] = v.strip()
+
+            # Ensure proper mapping
+            topic = lines.get("TOPIC", "General")
+            level = lines.get("LEVEL", "N/A")
+            word_val = lines.get("WORD", word)
+            definition = lines.get("DEFINITION", "")
+            example = lines.get("EXAMPLE", "")
+            pronunciation = lines.get("PRONUNCIATION", "")
+
             c.execute(
                 "INSERT INTO words VALUES (NULL,?,?,?,?,?,?)",
-                (
-                    lines.get("TOPIC"),
-                    lines.get("LEVEL"),
-                    lines.get("WORD"),
-                    lines.get("DEFINITION"),
-                    lines.get("EXAMPLE"),
-                    lines.get("PRONUNCIATION"),
-                )
+                (topic, level, word_val, definition, example, pronunciation)
             )
 
     await update.message.reply_text("AI word(s) added successfully.")
@@ -353,6 +359,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
