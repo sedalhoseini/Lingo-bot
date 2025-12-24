@@ -109,7 +109,7 @@ async def send_word(chat, row):
         f"*Definition:* {row['definition']}\n"
         f"*Example:* {row['example']}\n"
         f"*Pronunciation:* {row['pronunciation']}\n"
-        f"*Source:* {row.get('source','N/A')}"
+        f"*Source:* {row['source']}"
     )
 
     await chat.reply_text(text, parse_mode="Markdown")
@@ -176,7 +176,8 @@ def pick_word(topic=None, level=None):
             params.append(level)
 
         q += " ORDER BY RANDOM() LIMIT 1"
-        return c.execute(q, params).fetchone()
+        row = c.execute(q, params).fetchone()
+        return row
 
 # ================= BUTTON HANDLER =================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -305,42 +306,49 @@ async def save_pron(update, context):
 # ================= AI ADD =================
 async def ai_add(update, context):
     word = update.message.text.strip()
-    
-    # Call AI to generate full word info
-    try:
-        ai_text = ai_generate_full_word(word)
-    except Exception as e:
-        await update.message.reply_text(f"AI generation failed: {e}")
-        return ConversationHandler.END
+    sources = [
+        "https://dictionary.cambridge.org/",
+        "https://www.lexico.com/",
+        "https://www.merriam-webster.com/",
+        "https://www.collinsdictionary.com/",
+        "https://www.oxfordlearnersdictionaries.com/"
+    ]
 
-    # Split multiple entries if AI returned more than one part of speech
-    blocks = [b.strip() for b in ai_text.split("---") if b.strip()]
     added_count = 0
-
     with db() as c:
-        for b in blocks:
-            # Parse each line in the AI output
-            lines = {}
-            for line in b.splitlines():
-                if ":" in line:
-                    key, value = line.split(":", 1)
-                    lines[key.strip().upper()] = value.strip()
-            
-            # Map AI keys to DB fields
-            topic = lines.get("TOPIC", "General")
-            level = lines.get("LEVEL", "N/A")
-            word_val = lines.get("WORD", word)
-            definition = lines.get("DEFINITION", "")
-            example = lines.get("EXAMPLE", "")
-            pronunciation = lines.get("PRONUNCIATION", "")
-            source = lines.get("SOURCE", "AI")
+        for source in sources:
+            try:
+                # Call AI with source info
+                ai_text = ai_generate_full_word(word + f" (source: {source})")
+            except Exception as e:
+                continue  # Try next source if this fails
 
-            # Insert into database
-            c.execute(
-                "INSERT INTO words VALUES (NULL,?,?,?,?,?,?,?)",
-                (topic, level, word_val, definition, example, pronunciation, source)
-            )
-            added_count += 1
+            blocks = [b.strip() for b in ai_text.split("---") if b.strip()]
+            if not blocks:
+                continue
+
+            for b in blocks:
+                lines = {}
+                for line in b.splitlines():
+                    if ":" in line:
+                        key, value = line.split(":", 1)
+                        lines[key.strip().upper()] = value.strip()
+
+                topic_val = lines.get("TOPIC", "General")
+                level_val = lines.get("LEVEL", "N/A")
+                word_val = lines.get("WORD", word)
+                definition_val = lines.get("DEFINITION", "")
+                example_val = lines.get("EXAMPLE", "")
+                pronunciation_val = lines.get("PRONUNCIATION", "")
+
+                # Insert single word into database with source label
+                c.execute(
+                    "INSERT INTO words VALUES (NULL,?,?,?,?,?,?,?)",
+                    (topic_val, word_val, definition_val, example_val, pronunciation_val, level_val, source)
+                )
+                added_count += 1
+
+            break  # Stop after first successful source
 
     await update.message.reply_text(f"AI word(s) added successfully. Total added: {added_count}")
     return ConversationHandler.END
@@ -404,3 +412,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
