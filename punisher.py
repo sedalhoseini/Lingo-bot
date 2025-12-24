@@ -65,21 +65,21 @@ def init_db():
 def ai_generate_full_word(word: str):
     prompt = (
         "You are an English linguist.\n\n"
-        f'For the word: "{word}"\n\n'
-        "Return ALL parts of speech if multiple exist.\n\n"
-        "Format STRICTLY like this:\n"
+        f"For the word: '{word}'\n\n"
+        "Return ALL parts of speech if multiple exist.\n"
+        "STRICT FORMAT REQUIRED:\n"
+        "WORD: ...\n"
         "LEVEL: A1/A2/B1/B2/C1/C2\n"
         "TOPIC: ...\n"
-        "WORD: ...\n"
         "DEFINITION: ...\n"
         "EXAMPLE: ...\n"
         "PRONUNCIATION: IPA or text\n"
         "---\n"
-        "(repeat if another part of speech exists)"
+        "(Repeat this block for each part of speech if necessary)"
     )
 
     r = client.chat.completions.create(
-        model="llama-3.1-8b-instant",  # <- updated model
+        model="llama-3.1-8b-instant",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3,
     )
@@ -371,6 +371,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
