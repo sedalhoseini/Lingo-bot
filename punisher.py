@@ -155,7 +155,10 @@ def list_keyboard():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     with db() as c:
-        c.execute("INSERT OR IGNORE INTO users VALUES (?, NULL)", (uid,))
+        c.execute(
+            "INSERT OR IGNORE INTO users (user_id, timezone, send_time, last_sent, daily_time) VALUES (?, NULL, NULL, NULL, NULL)",
+            (uid,)
+        )
     await update.message.reply_text(
         "Main Menu:",
         reply_markup=main_keyboard(uid in ADMIN_IDS)
@@ -335,3 +338,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
