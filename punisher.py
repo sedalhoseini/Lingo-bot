@@ -93,7 +93,7 @@ def add_word_choice_keyboard():
 
 def list_keyboard_bottom():
     return ReplyKeyboardMarkup(
-        [["Just Words", "User Words"], ["🏠 Cancel"]],
+        [["Words", "My Words", "Clear My Words"], ["🏠 Cancel"]],
         resize_keyboard=True
     )
 
@@ -337,6 +337,7 @@ async def bulk_add_ai(update, context):
 async def list_handler(update, context):
     text = update.message.text
     uid = update.effective_user.id
+    username = update.effective_user.username
 
     if text == "🏠 Cancel":
         await update.message.reply_text(
@@ -346,15 +347,19 @@ async def list_handler(update, context):
         return ConversationHandler.END
 
     with db() as c:
-        if text == "Just Words":
+        if text == "Words":
             rows = c.execute("SELECT word FROM words LIMIT 30").fetchall()
             msg = "\n".join(r["word"] for r in rows)
-        elif text == "User Words":
+        elif text == "My Words":
             rows = c.execute(
                 "SELECT word FROM personal_words WHERE user_id=? LIMIT 30",
                 (uid,)
             ).fetchall()
-            msg = "\n".join(r["word"] for r in rows)
+            # Show username + word
+            msg = "\n".join(f"@{username}: {r['word']}" for r in rows)
+        elif text == "Clear My Words":
+            c.execute("DELETE FROM personal_words WHERE user_id=?", (uid,))
+            msg = "Your personal words have been cleared."
         else:
             msg = "No data."
 
@@ -427,4 +432,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
