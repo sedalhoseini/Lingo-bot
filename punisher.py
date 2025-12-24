@@ -2,10 +2,10 @@ import os
 import sqlite3
 from datetime import datetime
 from groq import Groq
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder, ContextTypes, CommandHandler,
-    CallbackQueryHandler, ConversationHandler, MessageHandler, filters
+    ConversationHandler, MessageHandler, filters
 )
 
 # ================= CONFIG =================
@@ -74,40 +74,28 @@ Separate each block with '---'.
     return r.choices[0].message.content.strip()
 
 # ================= KEYBOARDS =================
-def main_keyboard(is_admin=False):
-    kb = [
-        [InlineKeyboardButton("🎯 Get Word", callback_data="pick_word")],
-        [InlineKeyboardButton("➕ Add Word (Manual)", callback_data="add_manual")],
-        [InlineKeyboardButton("🤖 Add Word (AI)", callback_data="add_ai")],
-        [InlineKeyboardButton("📚 My Words", callback_data="my_words")],
+def main_menu(is_admin=False):
+    buttons = [
+        [KeyboardButton("🎯 Get Word"), KeyboardButton("📚 My Words")],
+        [KeyboardButton("➕ Add Word (Manual)"), KeyboardButton("🤖 Add Word (AI)")],
     ]
     if is_admin:
-        kb += [
-            [InlineKeyboardButton("📦 Bulk Add", callback_data="bulk_add")],
-            [InlineKeyboardButton("📋 List", callback_data="admin_list")],
-            [InlineKeyboardButton("📣 Broadcast", callback_data="broadcast")],
-            [InlineKeyboardButton("🗑 Clear Words", callback_data="clear_words")],
+        buttons += [
+            [KeyboardButton("📦 Bulk Add"), KeyboardButton("📋 List")],
+            [KeyboardButton("📣 Broadcast"), KeyboardButton("🗑 Clear Words")]
         ]
-    return InlineKeyboardMarkup(kb)
-
-def list_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("By Topic", callback_data="list_topic")],
-        [InlineKeyboardButton("By Level", callback_data="list_level")],
-        [InlineKeyboardButton("Just Words", callback_data="list_words")],
-        [InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")]
-    ])
+    return ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=False)
 
 # ================= HELPERS =================
 async def send_word(chat, row, is_admin=False):
     if not row:
-        await chat.reply_text("No word found.", reply_markup=main_keyboard(is_admin))
+        await chat.reply_text("No word found.", reply_markup=main_menu(is_admin))
         return
 
     source_text = row["source"]
     if source_text.startswith("http"):  # full URL
         source_display = f"[Source]({source_text})"
-    else:  # just show as name
+    else:
         source_display = f"[{source_text}](https://{source_text.replace('https://','')})"
 
     text = (
@@ -118,7 +106,7 @@ async def send_word(chat, row, is_admin=False):
         f"*Pronunciation:* {row['pronunciation']}\n"
         f"*Source:* {source_display}"
     )
-    await chat.reply_text(text, parse_mode="Markdown", reply_markup=main_keyboard(is_admin))
+    await chat.reply_text(text, parse_mode="Markdown", reply_markup=main_menu(is_admin))
 
 def pick_word_from_db(topic=None, level=None):
     with db() as c:
@@ -136,107 +124,82 @@ def pick_word_from_db(topic=None, level=None):
         q += " ORDER BY RANDOM() LIMIT 1"
         return c.execute(q, params).fetchone()
 
-# ================= BUTTON HANDLER =================
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    uid = q.from_user.id
-    d = q.data
+# ================= HANDLER =================
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    uid = update.effective_user.id
+    is_admin = uid in ADMIN_IDS
 
-    if d == "main_menu":
-        await q.message.reply_text("Main Menu:", reply_markup=main_keyboard(uid in ADMIN_IDS))
+    # ---------- MAIN MENU ----------
+    if text == "🎯 Get Word":
+        row = pick_word_from_db()
+        await send_word(update.message, row, is_admin)
         return ConversationHandler.END
 
-    # ================= USER WORDS =================
-    if d.startswith("my_words"):
-        page = int(d.split("_")[2]) if len(d.split("_")) > 2 else 0
+    elif text == "📚 My Words":
         with db() as c:
             words = c.execute("SELECT * FROM personal_words WHERE user_id=? ORDER BY id", (uid,)).fetchall()
         if not words:
-            await q.message.reply_text("You have no personal words.", reply_markup=main_keyboard(uid in ADMIN_IDS))
+            await update.message.reply_text("You have no personal words.", reply_markup=main_menu(is_admin))
             return ConversationHandler.END
 
-        page_size = 10
-        start = page * page_size
-        end = start + page_size
-        page_words = words[start:end]
-
-        text = ""
-        for row in page_words:
-            source_display = f"[{row['source']}](https://{row['source'].replace('https://','')})"
-            text += (
-                f"*Word:* {row['word']}\n"
-                f"*Level:* {row['level']}\n"
-                f"*Definition:* {row['definition']}\n"
-                f"*Example:* {row['example']}\n"
-                f"*Pronunciation:* {row['pronunciation']}\n"
-                f"*Source:* {source_display}\n\n"
-            )
-
-        kb = []
-        if start > 0:
-            kb.append(InlineKeyboardButton("⬅ Previous", callback_data=f"my_words_{page-1}"))
-        if end < len(words):
-            kb.append(InlineKeyboardButton("Next ➡", callback_data=f"my_words_{page+1}"))
-        kb.append(InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu"))
-        reply_markup = InlineKeyboardMarkup([kb])
-        await q.message.reply_text(text.strip(), parse_mode="Markdown", reply_markup=reply_markup)
+        grouped = {}
+        for w in words:
+            grouped.setdefault(w["level"], []).append(w)
+        msg = ""
+        for level, ws in grouped.items():
+            msg += f"*Level {level}:*\n"
+            for w in ws:
+                msg += f"- {w['word']}\n"
+            msg += "\n"
+        await update.message.reply_text(msg.strip(), reply_markup=main_menu(is_admin))
         return ConversationHandler.END
 
-    # ================= PICK WORD =================
-    if d == "pick_word":
-        row = pick_word_from_db()
-        await send_word(q.message, row, uid in ADMIN_IDS)
-        return ConversationHandler.END
-
-    # ================= MANUAL / AI / BULK =================
-    if d == "add_manual":
+    elif text == "➕ Add Word (Manual)":
         context.user_data.clear()
-        await q.message.reply_text("Topic?")
+        await update.message.reply_text("Topic?")
         return 0
-    if d == "add_ai":
-        await q.message.reply_text("Send the word only:")
+
+    elif text == "🤖 Add Word (AI)":
+        await update.message.reply_text("Send the word only:")
         return 7
-    if d == "bulk_add":
-        await q.message.reply_text("Send bulk lines: topic|level|word|definition|example")
+
+    elif text == "📦 Bulk Add" and is_admin:
+        await update.message.reply_text("Send bulk lines: topic|level|word|definition|example")
         return 8
 
-    # ================= ADMIN ONLY =================
-    if d == "clear_words" and uid in ADMIN_IDS:
+    elif text == "📋 List" and is_admin:
         with db() as c:
-            c.execute("DELETE FROM words")
-        await q.message.reply_text("All words cleared.")
+            words = c.execute("SELECT topic, level, word FROM words ORDER BY topic, level").fetchall()
+        if not words:
+            await update.message.reply_text("No words yet.", reply_markup=main_menu(is_admin))
+            return ConversationHandler.END
+
+        grouped = {}
+        for w in words:
+            grouped.setdefault(w["topic"], {}).setdefault(w["level"], []).append(w["word"])
+        msg = ""
+        for topic, levels in grouped.items():
+            msg += f"*Topic: {topic}*\n"
+            for lvl, ws in levels.items():
+                msg += f"  _Level {lvl}:_\n"
+                for w in ws:
+                    msg += f"    - {w}\n"
+            msg += "\n"
+        await update.message.reply_text(msg.strip(), reply_markup=main_menu(is_admin))
         return ConversationHandler.END
 
-    if d == "broadcast" and uid in ADMIN_IDS:
-        await q.message.reply_text("Send broadcast message:")
+    elif text == "📣 Broadcast" and is_admin:
+        await update.message.reply_text("Send broadcast message:")
         return 9
 
-    # ================= LIST BUTTONS =================
-    if d == "admin_list" and uid in ADMIN_IDS:
-        await q.message.reply_text("Choose list type:", reply_markup=list_keyboard())
-        return ConversationHandler.END
-    if d == "list_topic":
+    elif text == "🗑 Clear Words" and is_admin:
         with db() as c:
-            topics = c.execute("SELECT DISTINCT topic FROM words").fetchall()
-        await q.message.reply_text("\n".join([t["topic"] for t in topics]) or "Empty", reply_markup=main_keyboard(uid in ADMIN_IDS))
-        return ConversationHandler.END
-    if d == "list_level":
-        with db() as c:
-            levels = c.execute("SELECT DISTINCT level FROM words").fetchall()
-        await q.message.reply_text("\n".join([l["level"] for l in levels]) or "Empty", reply_markup=main_keyboard(uid in ADMIN_IDS))
-        return ConversationHandler.END
-    if d == "list_words":
-        with db() as c:
-            words = c.execute("SELECT word FROM words").fetchall()
-        await q.message.reply_text("\n".join([w["word"] for w in words]) or "Empty", reply_markup=main_keyboard(uid in ADMIN_IDS))
+            c.execute("DELETE FROM words")
+        await update.message.reply_text("All words cleared.", reply_markup=main_menu(is_admin))
         return ConversationHandler.END
 
-    return ConversationHandler.END
-
-# ================= MANUAL ADD =================
-async def manual_add(update, context):
-    text = update.message.text.strip()
+    # ---------- MANUAL ADD ----------
     fields = ["topic", "level", "word", "definition", "example"]
     for f in fields:
         if f not in context.user_data:
@@ -250,9 +213,8 @@ async def manual_add(update, context):
             }[f]
             await update.message.reply_text(next_prompt)
             return fields.index(f)+1
-    return ConversationHandler.END
 
-async def save_pron(update, context):
+    # ---------- SAVE PRON ----------
     pron = update.message.text or "Audio received"
     d = context.user_data
     with db() as c:
@@ -260,7 +222,7 @@ async def save_pron(update, context):
             "INSERT INTO words VALUES (NULL,?,?,?,?,?,?,?)",
             (d["topic"], d["word"], d["definition"], d["example"], pron, d["level"], "Manual")
         )
-    await update.message.reply_text("Word saved.", reply_markup=main_keyboard(True))
+    await update.message.reply_text("Word saved.", reply_markup=main_menu(is_admin))
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -271,12 +233,12 @@ async def ai_add(update, context):
     try:
         ai_text = ai_generate_full_word(word)
     except Exception:
-        await update.message.reply_text("Failed to generate AI word.", reply_markup=main_keyboard(True))
+        await update.message.reply_text("Failed to generate AI word.", reply_markup=main_menu(True))
         return ConversationHandler.END
 
     blocks = [b.strip() for b in ai_text.split("---") if b.strip()]
     if not blocks:
-        await update.message.reply_text("No word generated.", reply_markup=main_keyboard(True))
+        await update.message.reply_text("No word generated.", reply_markup=main_menu(True))
         return ConversationHandler.END
 
     b = blocks[0]
@@ -301,24 +263,7 @@ async def ai_add(update, context):
         )
         added_count += 1
 
-    await update.message.reply_text(f"AI word added successfully. Total added: {added_count}", reply_markup=main_keyboard(True))
-    return ConversationHandler.END
-
-# ================= BULK ADD =================
-async def bulk_add(update, context):
-    ok = 0
-    with db() as c:
-        for l in update.message.text.splitlines():
-            try:
-                t, lv, w, d, e = l.split("|")
-                c.execute(
-                    "INSERT INTO words VALUES (NULL,?,?,?,?,?,?,?)",
-                    (t, w, d, e, "", lv, "Bulk")
-                )
-                ok += 1
-            except:
-                continue
-    await update.message.reply_text(f"Added {ok} words.", reply_markup=main_keyboard(True))
+    await update.message.reply_text(f"AI word added successfully. Total added: {added_count}", reply_markup=main_menu(True))
     return ConversationHandler.END
 
 # ================= BROADCAST =================
@@ -332,7 +277,7 @@ async def broadcast(update, context):
                 await context.bot.send_message(u["user_id"], msg)
             except:
                 continue
-    await update.message.reply_text("Broadcast sent.", reply_markup=main_keyboard(True))
+    await update.message.reply_text("Broadcast sent.", reply_markup=main_menu(True))
     return ConversationHandler.END
 
 # ================= START =================
@@ -340,7 +285,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     with db() as c:
         c.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
-    await update.message.reply_text("Main Menu:", reply_markup=main_keyboard(uid in ADMIN_IDS))
+    await update.message.reply_text("Main Menu:", reply_markup=main_menu(uid in ADMIN_IDS))
     return ConversationHandler.END
 
 # ================= MAIN =================
@@ -349,22 +294,16 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(button_handler), CommandHandler("start", start)],
+        entry_points=[CommandHandler("start", start)],
         states={
-            0: [MessageHandler(filters.TEXT, manual_add)],
-            1: [MessageHandler(filters.TEXT, manual_add)],
-            2: [MessageHandler(filters.TEXT, manual_add)],
-            3: [MessageHandler(filters.TEXT, manual_add)],
-            4: [MessageHandler(filters.TEXT, manual_add)],
-            5: [MessageHandler(filters.ALL, save_pron)],
-            7: [MessageHandler(filters.TEXT, ai_add)],
-            8: [MessageHandler(filters.TEXT, bulk_add)],
-            9: [MessageHandler(filters.TEXT, broadcast)],
+            0: [MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler)],
+            7: [MessageHandler(filters.TEXT & ~filters.COMMAND, ai_add)],
+            8: [MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler)],
+            9: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast)],
         },
         fallbacks=[]
     )
     app.add_handler(conv)
-    app.add_handler(CommandHandler("start", start))
     app.run_polling()
 
 if __name__ == "__main__":
