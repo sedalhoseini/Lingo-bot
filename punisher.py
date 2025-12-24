@@ -295,9 +295,106 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return ConversationHandler.END
 
-# ================= OTHER HANDLERS =================
-# manual_add, save_pron, ai_add, bulk_add, broadcast remain unchanged
-# (copy them as in your code, no changes needed)
+# ================= MANUAL ADD =================
+async def manual_add(update, context):
+    text = update.message.text.strip()
+    fields = ["topic", "level", "word", "definition", "example"]
+    for f in fields:
+        if f not in context.user_data:
+            context.user_data[f] = text
+            next_prompt = {
+                "topic": "Level?",
+                "level": "Word?",
+                "word": "Definition?",
+                "definition": "Example?",
+                "example": "Send pronunciation text or audio:"
+            }[f]
+            await update.message.reply_text(next_prompt)
+            return fields.index(f)+1
+    return ConversationHandler.END
+
+async def save_pron(update, context):
+    pron = update.message.text or "Audio received"
+    d = context.user_data
+    with db() as c:
+        c.execute(
+            "INSERT INTO words VALUES (NULL,?,?,?,?,?,?,?)",
+            (d["topic"], d["word"], d["definition"], d["example"], pron, d["level"], "Manual")
+        )
+    await update.message.reply_text("Word saved.", reply_markup=main_keyboard_bottom(True))
+    context.user_data.clear()
+    return ConversationHandler.END
+
+# ================= AI ADD =================
+async def ai_add(update, context):
+    word = update.message.text.strip()
+    added_count = 0
+    try:
+        ai_text = ai_generate_full_word(word)
+    except Exception:
+        await update.message.reply_text("Failed to generate AI word.", reply_markup=main_keyboard_bottom(True))
+        return ConversationHandler.END
+
+    blocks = [b.strip() for b in ai_text.split("---") if b.strip()]
+    if not blocks:
+        await update.message.reply_text("No word generated.", reply_markup=main_keyboard_bottom(True))
+        return ConversationHandler.END
+
+    b = blocks[0]
+    lines = {}
+    for line in b.splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            lines[key.strip().upper()] = value.strip()
+
+    topic_val = lines.get("TOPIC", "General")
+    level_val = lines.get("LEVEL", "N/A")
+    word_val = lines.get("WORD", word)
+    definition_val = lines.get("DEFINITION", "")
+    example_val = lines.get("EXAMPLE", "")
+    pronunciation_val = lines.get("PRONUNCIATION", "")
+    source_val = lines.get("SOURCE", "AI")
+
+    with db() as c:
+        c.execute(
+            "INSERT INTO words VALUES (NULL,?,?,?,?,?,?,?)",
+            (topic_val, word_val, definition_val, example_val, pronunciation_val, level_val, source_val)
+        )
+        added_count += 1
+
+    await update.message.reply_text(f"AI word added successfully. Total added: {added_count}", reply_markup=main_keyboard_bottom(True))
+    return ConversationHandler.END
+
+# ================= BULK ADD =================
+async def bulk_add(update, context):
+    ok = 0
+    with db() as c:
+        for l in update.message.text.splitlines():
+            try:
+                t, lv, w, d, e = l.split("|")
+                c.execute(
+                    "INSERT INTO words VALUES (NULL,?,?,?,?,?,?,?)",
+                    (t, w, d, e, "", lv, "Bulk")
+                )
+                ok += 1
+            except:
+                continue
+    await update.message.reply_text(f"Added {ok} words.", reply_markup=main_keyboard_bottom(True))
+    return ConversationHandler.END
+
+# ================= BROADCAST =================
+async def broadcast(update, context):
+    msg = update.message.text
+    with db() as c:
+        users = c.execute("SELECT user_id FROM users").fetchall()
+    for u in users:
+        if u["user_id"] not in ADMIN_IDS:
+            try:
+                await context.bot.send_message(u["user_id"], msg)
+            except:
+                continue
+    await update.message.reply_text("Broadcast sent.", reply_markup=main_keyboard_bottom(True))
+    return ConversationHandler.END
 
 # ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -339,3 +436,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
