@@ -63,6 +63,8 @@ def ai_generate_full_word(word: str):
     prompt = f"""
 You are an English linguist.
 
+Generate full dictionary-style data for the word: "{word}"
+
 If the word has multiple parts of speech (noun, verb, adjective, etc),
 OUTPUT EACH AS A SEPARATE BLOCK.
 
@@ -573,6 +575,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
