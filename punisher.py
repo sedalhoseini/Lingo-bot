@@ -122,12 +122,13 @@ async def send_word(chat, row):
         await chat.reply_text("No word found.")
         return
     text = (
-        f"*Word:* {row['word']}\n"
-        f"*Level:* {row['level']}\n"
-        f"*Definition:* {row['definition']}\n"
-        f"*Example:* {row['example']}\n"
-        f"*Pronunciation:* {row['pronunciation']}\n"
-        f"*Source:* {row['source']}"
+        f"Word: {row['word']}\n"
+        f"Part of Speech: {row['word'].split('(')[-1].replace(')', '')}\n"
+        f"Level: {row['level']}\n"
+        f"Definition: {row['definition']}\n"
+        f"Example: {row['example']}\n"
+        f"Pronunciation: {row['pronunciation']}\n"
+        f"Source: {row['source']}"
     )
     await chat.reply_text(text, parse_mode="Markdown")
 
@@ -575,6 +576,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
