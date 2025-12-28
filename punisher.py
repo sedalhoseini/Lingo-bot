@@ -442,23 +442,22 @@ async def daily_pos_handler(update, context):
         context.user_data["daily_pos"] = None
 
     uid = update.effective_user.id
+    daily_count = context.user_data.get("daily_count")
+    daily_time = context.user_data.get("daily_time")
+    daily_level = context.user_data.get("daily_level")
+    daily_pos = context.user_data.get("daily_pos")
+    
     with db() as c:
         c.execute("""
             INSERT INTO users (user_id, daily_enabled, daily_count, daily_time, daily_level, daily_pos)
-            VALUES (?,1,?,?,?,?,?)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
-                daily_enabled=1,
+                daily_enabled=excluded.daily_enabled,
                 daily_count=excluded.daily_count,
                 daily_time=excluded.daily_time,
                 daily_level=excluded.daily_level,
                 daily_pos=excluded.daily_pos
-        """, (
-            uid,
-            context.user_data["daily_count"],
-            context.user_data["daily_time"],
-            context.user_data.get("daily_level"),
-            context.user_data.get("daily_pos"),
-        ))
+        """, (uid, 1, daily_count, daily_time, daily_level, daily_pos))
 
 
     context.user_data.clear()
@@ -815,6 +814,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
