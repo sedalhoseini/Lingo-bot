@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 from datetime import datetime
 import pytz
@@ -27,6 +28,16 @@ client = Groq(api_key=GROQ_API_KEY)
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
 }
+
+# ================= FALLBACK / CANCEL =================
+async def cancel(update, context):
+    context.user_data.clear()
+    uid = update.effective_user.id
+    await update.message.reply_text(
+        "Operation cancelled.",
+        reply_markup=main_keyboard_bottom(uid in ADMIN_IDS)
+    )
+    return ConversationHandler.END
 
 # ================= DATABASE =================
 def db():
@@ -382,16 +393,25 @@ async def main_menu_handler(update, context):
 # Step 1 — How many words
 async def daily_count_handler(update, context):
     try:
-        context.user_data["daily_count"] = int(update.message.text)
+        count = int(update.message.text)
+        if count < 1 or count > 50:
+            raise ValueError
+        context.user_data["daily_count"] = count
     except:
-        await update.message.reply_text("Please enter a valid number.")
+        await update.message.reply_text("Please enter a valid number between 1 and 50.")
         return DAILY_COUNT
+
     await update.message.reply_text("What time should I send the words? (HH:MM)")
     return DAILY_TIME
 
 # Step 2 — Time
 async def daily_time_handler(update, context):
-    context.user_data["daily_time"] = update.message.text.strip()
+    time_text = update.message.text.strip()
+    if not re.match(r"^\d{2}:\d{2}$", time_text):
+        await update.message.reply_text("Please enter time in HH:MM format (e.g., 09:30).")
+        return DAILY_TIME
+
+    context.user_data["daily_time"] = time_text
     keyboard = ReplyKeyboardMarkup(
         [["A1","A2","B1"],["B2","C1"],["Skip"]],
         resize_keyboard=True
@@ -758,27 +778,36 @@ def main():
             MessageHandler(filters.TEXT & ~filters.COMMAND, main_menu_handler)
         ],
         states={
+            # MANUAL ADD (step 0-5)
             0: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_add)],
             1: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_add)],
             2: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_add)],
             3: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_add)],
             4: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_add)],
             5: [MessageHandler(filters.ALL, save_pron)],
+    
+            # ADD WORD CHOICE (manual / AI)
             6: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_word_choice_handler)],
             7: [MessageHandler(filters.TEXT & ~filters.COMMAND, ai_add)],
+    
+            # BROADCAST (admin)
             9: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast)],
+    
+            # BULK ADD
             10: [MessageHandler(filters.TEXT & ~filters.COMMAND, bulk_add_choice)],
             11: [MessageHandler(filters.TEXT & ~filters.COMMAND, bulk_add_manual)],
             12: [MessageHandler(filters.TEXT & ~filters.COMMAND, bulk_add_ai)],
+    
+            # LIST WORDS
             20: [MessageHandler(filters.TEXT & ~filters.COMMAND, list_handler)],
-            
+    
+            # DAILY WORDS CONFIG
             DAILY_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, daily_count_handler)],
             DAILY_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, daily_time_handler)],
             DAILY_LEVEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, daily_level_handler)],
             DAILY_POS: [MessageHandler(filters.TEXT & ~filters.COMMAND, daily_pos_handler)],
-
         },
-        fallbacks=[]
+        fallbacks=[CommandHandler("cancel", cancel)]
     )
 
     app.add_handler(conv)
@@ -786,5 +815,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
