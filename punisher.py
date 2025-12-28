@@ -535,12 +535,15 @@ async def ai_add(update, context):
     uid = update.effective_user.id
     word = update.message.text.strip()
 
+    # Step 1: Scrape websites first
     data = get_word_from_web(word)
+
+    # Step 2: Fill only missing fields with AI
     data = ai_fill_missing(data)
 
+    # Step 3: Save to DB
     with db() as c:
         if uid in ADMIN_IDS:
-            # Admins → public words
             c.execute(
                 "INSERT INTO words (topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?)",
                 (
@@ -554,7 +557,6 @@ async def ai_add(update, context):
                 )
             )
         else:
-            # Users → personal words
             c.execute(
                 "INSERT INTO personal_words (user_id, topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?,?)",
                 (
@@ -574,7 +576,7 @@ async def ai_add(update, context):
         reply_markup=main_keyboard_bottom(uid in ADMIN_IDS)
     )
     return ConversationHandler.END
-
+    
 # ================= BULK ADD =================
 async def bulk_add_choice(update, context):
     text = update.message.text
@@ -615,6 +617,7 @@ async def bulk_add_manual(update, context):
     return ConversationHandler.END
 
 async def bulk_add_ai(update, context):
+    uid = update.effective_user.id
     words = [w.strip() for w in update.message.text.splitlines() if w.strip()]
 
     with db() as c:
@@ -622,22 +625,37 @@ async def bulk_add_ai(update, context):
             data = get_word_from_web(word)
             data = ai_fill_missing(data)
 
-            c.execute(
-                "INSERT INTO words (topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?)",
-                (
-                    "General",
-                    f"{data['word']} ({data['parts']})",
-                    data["definition"],
-                    data["example"],
-                    data["pronunciation"],
-                    data["level"],
-                    data["source"],
+            if uid in ADMIN_IDS:
+                c.execute(
+                    "INSERT INTO words (topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?)",
+                    (
+                        "General",
+                        f"{data['word']} ({data['parts']})",
+                        data["definition"],
+                        data["example"],
+                        data["pronunciation"],
+                        data["level"],
+                        data["source"],
+                    )
                 )
-            )
+            else:
+                c.execute(
+                    "INSERT INTO personal_words (user_id, topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?,?)",
+                    (
+                        uid,
+                        "General",
+                        f"{data['word']} ({data['parts']})",
+                        data["definition"],
+                        data["example"],
+                        data["pronunciation"],
+                        data["level"],
+                        data["source"],
+                    )
+                )
 
     await update.message.reply_text(
         "Bulk AI add done (Dictionary + AI).",
-        reply_markup=main_keyboard_bottom(True)
+        reply_markup=main_keyboard_bottom(uid in ADMIN_IDS)
     )
     return ConversationHandler.END
 
@@ -814,6 +832,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
