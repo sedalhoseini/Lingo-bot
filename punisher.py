@@ -32,9 +32,14 @@ def init_db():
         c.executescript("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            daily_enabled INTEGER DEFAULT 0,
+            daily_count INTEGER,
             daily_time TEXT,
-            username TEXT
+            daily_level TEXT,
+            daily_pos TEXT
         );
+
         CREATE TABLE IF NOT EXISTS words (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             topic TEXT,
@@ -496,28 +501,24 @@ async def bulk_add_ai(update, context):
 
     with db() as c:
         for word in words:
-            ai_text = ai_generate_full_word(word)
-            lines = {}
-            for line in ai_text.splitlines():
-                if ":" in line:
-                    k, v = line.split(":", 1)
-                    lines[k.strip()] = v.strip()
+            data = get_word_from_web(word)
+            data = ai_fill_missing(data)
 
             c.execute(
                 "INSERT INTO words (topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?)",
                 (
-                    lines.get("TOPIC", "General"),
-                    lines.get("WORD", word),
-                    lines.get("DEFINITION", ""),
-                    lines.get("EXAMPLE", ""),
-                    lines.get("PRONUNCIATION", ""),
-                    lines.get("LEVEL", ""),
-                    lines.get("SOURCE", "AI"),
+                    "General",
+                    f"{data['word']} ({data['parts']})",
+                    data["definition"],
+                    data["example"],
+                    data["pronunciation"],
+                    data["level"],
+                    data["source"],
                 )
             )
 
     await update.message.reply_text(
-        "Bulk AI add done.",
+        "Bulk AI add done (Dictionary + AI).",
         reply_markup=main_keyboard_bottom(True)
     )
     return ConversationHandler.END
@@ -715,6 +716,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
