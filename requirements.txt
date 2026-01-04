@@ -1,1 +1,5 @@
-python-telegram-bot==20.4
+python-telegram-bot[job-queue]==20.4
+groq
+requests
+beautifulsoup4
+pytz
