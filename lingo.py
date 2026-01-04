@@ -13,11 +13,12 @@ from telegram.ext import (
 )
 
 # ================= VERSION INFO =================
-BOT_VERSION = "0.1.0"
-VERSION_DATE = "2026-01-04"
+BOT_VERSION = "0.2.1"
+VERSION_DATE = "2026-01-05"
 CHANGELOG = """
-• Initial Beta Release for Students
-• Added Daily Words & AI Dictionary
+• Everyone can add Global Words
+• Removed Personal Words feature
+• Unified Database for all users
 """
 # ================= DAILY STATES =================
 DAILY_COUNT = 31
@@ -54,6 +55,9 @@ def db():
 
 def init_db():
     with db() as c:
+        # CLEANUP: Remove the old personal table if it exists
+        c.execute("DROP TABLE IF EXISTS personal_words")
+        
         c.executescript("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -75,17 +79,7 @@ def init_db():
             level TEXT,
             source TEXT
         );
-        CREATE TABLE IF NOT EXISTS personal_words (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            topic TEXT,
-            word TEXT,
-            definition TEXT,
-            example TEXT,
-            pronunciation TEXT,
-            level TEXT,
-            source TEXT
-        );
+        
         CREATE TABLE IF NOT EXISTS sent_words (
             user_id INTEGER,
             word_id INTEGER,
@@ -269,10 +263,12 @@ Return only key:value lines.
 
 # ================= KEYBOARDS =================
 def main_keyboard_bottom(is_admin=False):
+    # EVERYONE sees "Add Word" now
     kb = [
         ["🎯 Get Word", "➕ Add Word"],
         ["📚 List Words", "⏰ Daily Words"]
     ]
+    # ADMINS SEE EXTRA TOOLS:
     if is_admin:
         kb.append(["📦 Bulk Add"])
         kb.append(["📣 Broadcast", "🗑 Clear Words"])
@@ -283,18 +279,6 @@ def add_word_choice_keyboard():
         [["Manual", "🤖 AI"], ["🏠 Cancel"]],
         resize_keyboard=True
     )
-
-def list_keyboard_bottom(is_admin=False):
-    if is_admin:
-        return ReplyKeyboardMarkup(
-            [["Public Words", "Personal Words"], ["🏠 Cancel"]],
-            resize_keyboard=True
-        )
-    else:
-        return ReplyKeyboardMarkup(
-            [["Words", "My Words", "Clear My Words"], ["🏠 Cancel"]],
-            resize_keyboard=True
-        )
 
 # ================= HELPERS =================
 async def version_command(update, context):
@@ -364,6 +348,7 @@ def pick_word_for_user(user_id):
 async def main_menu_handler(update, context):
     text = update.message.text
     uid = update.effective_user.id
+    is_admin = uid in ADMIN_IDS
 
     if text == "🎯 Get Word":
         await send_word(update.message, pick_word_for_user(uid))
@@ -372,7 +357,7 @@ async def main_menu_handler(update, context):
     if text == "➕ Add Word":
         context.user_data.clear()
         await update.message.reply_text(
-            "Choose how to add the word:",
+            "Choose how to add the word (Global):",
             reply_markup=add_word_choice_keyboard()
         )
         return 6
@@ -383,24 +368,36 @@ async def main_menu_handler(update, context):
         return DAILY_COUNT
 
     if text == "📚 List Words":
+        # Simply list the global words
+        with db() as c:
+            rows = c.execute(
+                "SELECT topic, level, word FROM words ORDER BY topic, level LIMIT 50"
+            ).fetchall()
+        
+        if rows:
+            msg = "\n".join(f"{r['topic']} | {r['level']} | {r['word']}" for r in rows)
+        else:
+            msg = "No words in the database yet."
+            
         await update.message.reply_text(
-            "Choose list type:",
-            reply_markup=list_keyboard_bottom(uid in ADMIN_IDS)
+            f"📚 *Global Word List:*\n\n{msg}",
+            reply_markup=main_keyboard_bottom(is_admin),
+            parse_mode="Markdown"
         )
-        return 20
+        return ConversationHandler.END
 
-    if text == "📦 Bulk Add" and uid in ADMIN_IDS:
+    if text == "📦 Bulk Add" and is_admin:
         await update.message.reply_text(
             "Choose bulk add type:",
             reply_markup=add_word_choice_keyboard()
         )
         return 10
 
-    if text == "📣 Broadcast" and uid in ADMIN_IDS:
+    if text == "📣 Broadcast" and is_admin:
         await update.message.reply_text("Send message to broadcast:")
         return 9
 
-    if text == "🗑 Clear Words" and uid in ADMIN_IDS:
+    if text == "🗑 Clear Words" and is_admin:
         with db() as c:
             c.execute("DELETE FROM words")
         await update.message.reply_text(
@@ -411,7 +408,7 @@ async def main_menu_handler(update, context):
 
     await update.message.reply_text(
         "Main Menu:",
-        reply_markup=main_keyboard_bottom(uid in ADMIN_IDS)
+        reply_markup=main_keyboard_bottom(is_admin)
     )
     return ConversationHandler.END
 
@@ -537,21 +534,16 @@ async def save_pron(update, context):
     uid = update.effective_user.id
     pron = update.message.text
 
+    # ALWAYS Insert into GLOBAL words
     with db() as c:
-        if uid in ADMIN_IDS:
-            c.execute(
-                "INSERT INTO words (topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?)",
-                (d["topic"], d["word"], d["definition"], d["example"], pron, d["level"], "Manual")
-            )
-        else:
-            c.execute(
-                "INSERT INTO personal_words (user_id, topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?,?)",
-                (uid, d["topic"], d["word"], d["definition"], d["example"], pron, d["level"], "Manual")
-            )
+        c.execute(
+            "INSERT INTO words (topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?)",
+            (d["topic"], d["word"], d["definition"], d["example"], pron, d["level"], "Manual")
+        )
 
     context.user_data.clear()
     await update.message.reply_text(
-        "Word saved.",
+        "Word saved to Global Database.",
         reply_markup=main_keyboard_bottom(uid in ADMIN_IDS)
     )
     return ConversationHandler.END
@@ -566,38 +558,23 @@ async def ai_add(update, context):
     # Step 2: Fill only missing fields with AI
     data = ai_fill_missing(data)
 
-    # Step 3: Save to DB
+    # Step 3: Save to DB (GLOBAL ONLY)
     with db() as c:
-        if uid in ADMIN_IDS:
-            c.execute(
-                "INSERT INTO words (topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?)",
-                (
-                    "General",
-                    f"{data['word']} ({data['parts']})",
-                    data["definition"],
-                    data["example"],
-                    data["pronunciation"],
-                    data["level"],
-                    data["source"],
-                )
+        c.execute(
+            "INSERT INTO words (topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?)",
+            (
+                "General",
+                f"{data['word']} ({data['parts']})",
+                data["definition"],
+                data["example"],
+                data["pronunciation"],
+                data["level"],
+                data["source"],
             )
-        else:
-            c.execute(
-                "INSERT INTO personal_words (user_id, topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?,?)",
-                (
-                    uid,
-                    "General",
-                    f"{data['word']} ({data['parts']})",
-                    data["definition"],
-                    data["example"],
-                    data["pronunciation"],
-                    data["level"],
-                    data["source"],
-                )
-            )
+        )
 
     await update.message.reply_text(
-        "Word added (Dictionary + AI).",
+        "Word added to Global Database (Dictionary + AI).",
         reply_markup=main_keyboard_bottom(uid in ADMIN_IDS)
     )
     return ConversationHandler.END
@@ -650,97 +627,22 @@ async def bulk_add_ai(update, context):
             data = get_word_from_web(word)
             data = ai_fill_missing(data)
 
-            if uid in ADMIN_IDS:
-                c.execute(
-                    "INSERT INTO words (topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?)",
-                    (
-                        "General",
-                        f"{data['word']} ({data['parts']})",
-                        data["definition"],
-                        data["example"],
-                        data["pronunciation"],
-                        data["level"],
-                        data["source"],
-                    )
+            c.execute(
+                "INSERT INTO words (topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?)",
+                (
+                    "General",
+                    f"{data['word']} ({data['parts']})",
+                    data["definition"],
+                    data["example"],
+                    data["pronunciation"],
+                    data["level"],
+                    data["source"],
                 )
-            else:
-                c.execute(
-                    "INSERT INTO personal_words (user_id, topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?,?)",
-                    (
-                        uid,
-                        "General",
-                        f"{data['word']} ({data['parts']})",
-                        data["definition"],
-                        data["example"],
-                        data["pronunciation"],
-                        data["level"],
-                        data["source"],
-                    )
-                )
+            )
 
     await update.message.reply_text(
-        "Bulk AI add done (Dictionary + AI).",
+        "Bulk AI add done (Global).",
         reply_markup=main_keyboard_bottom(uid in ADMIN_IDS)
-    )
-    return ConversationHandler.END
-
-# ================= LIST =================
-async def list_handler(update, context):
-    text = update.message.text
-    uid = update.effective_user.id
-    username = update.effective_user.username
-    is_admin = uid in ADMIN_IDS
-
-    if text == "🏠 Cancel":
-        await update.message.reply_text(
-            "Main Menu:",
-            reply_markup=main_keyboard_bottom(is_admin)
-        )
-        return ConversationHandler.END
-
-    with db() as c:
-        if not is_admin:
-            # USER menu
-            if text == "Words":
-                rows = c.execute(
-                    "SELECT topic, level, word FROM words ORDER BY topic, level LIMIT 30"
-                ).fetchall()
-                msg = "\n".join(f"{r['topic']} | {r['level']} | {r['word']}" for r in rows)
-
-            elif text == "My Words":
-                rows = c.execute(
-                    "SELECT word FROM personal_words WHERE user_id=? LIMIT 30",
-                    (uid,)
-                ).fetchall()
-                # User words only, no @username
-                msg = "\n".join(r["word"] for r in rows)
-            elif text == "Clear My Words":
-                c.execute("DELETE FROM personal_words WHERE user_id=?", (uid,))
-                msg = "Your personal words have been cleared."
-            else:
-                msg = "No data."
-        else:
-            # ADMIN menu
-            if text == "Public Words":
-                rows = c.execute(
-                    "SELECT * FROM words ORDER BY topic, level, id LIMIT 50"
-                ).fetchall()
-                msg = "\n".join(
-                    f"{r['topic']} | {r['level']} | {r['word']}" for r in rows
-                )
-            elif text == "Personal Words":
-                rows = c.execute(
-                    "SELECT pw.word, u.username FROM personal_words pw "
-                    "JOIN users u ON pw.user_id=u.user_id "
-                    "ORDER BY u.username, pw.id LIMIT 50"
-                ).fetchall()
-                msg = "\n".join(f"@{r['username']}: {r['word']}" for r in rows)
-            else:
-                msg = "No data."
-
-    await update.message.reply_text(
-        msg or "No words found.",
-        reply_markup=main_keyboard_bottom(is_admin)
     )
     return ConversationHandler.END
 
@@ -792,7 +694,6 @@ async def auto_backup(context):
                     chat_id=admin_id,
                     document=f,
                     filename=filename,
-                    # We use single * for bold in standard Markdown, and ts_text (no underscores)
                     caption=f"🌙 *Nightly Backup*\n📅 {ts_text}\n🛡 System Auto-Save",
                     parse_mode="Markdown"
                 )
@@ -906,9 +807,6 @@ def main():
             11: [MessageHandler(filters.TEXT & ~filters.COMMAND, bulk_add_manual)],
             12: [MessageHandler(filters.TEXT & ~filters.COMMAND, bulk_add_ai)],
     
-            # LIST WORDS
-            20: [MessageHandler(filters.TEXT & ~filters.COMMAND, list_handler)],
-    
             # DAILY WORDS CONFIG
             DAILY_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, daily_count_handler)],
             DAILY_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, daily_time_handler)],
@@ -923,4 +821,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
