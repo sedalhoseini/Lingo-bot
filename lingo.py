@@ -34,7 +34,7 @@ CHANGELOG = """
     DAILY_COUNT, DAILY_TIME, DAILY_LEVEL, DAILY_POS,
     SEARCH_CHOICE, SEARCH_QUERY,
     SETTINGS_CHOICE, SETTINGS_PRIORITY
-) = range(20)
+) = range(21)
 
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -683,3 +683,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
