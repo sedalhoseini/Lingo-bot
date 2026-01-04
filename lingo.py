@@ -776,9 +776,13 @@ async def start(update, context):
 
 # ============== Auto Backup ==============
 async def auto_backup(context):
-    # Create filename with timestamp
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    filename = f"backup_auto_{timestamp}.db"
+    now = datetime.now()
+    # 1. Format for Filename (Uses _ which is safe for files)
+    ts_file = now.strftime("%Y-%m-%d_%H-%M")
+    # 2. Format for Chat Caption (Uses space to avoid crashing Markdown)
+    ts_text = now.strftime("%Y-%m-%d %H:%M")
+    
+    filename = f"backup_auto_{ts_file}.db"
 
     # Send backup to ALL Admins
     for admin_id in ADMIN_IDS:
@@ -788,7 +792,8 @@ async def auto_backup(context):
                     chat_id=admin_id,
                     document=f,
                     filename=filename,
-                    caption=f"🌙 **Nightly Backup**\n📅 {timestamp}\n🛡 System Auto-Save",
+                    # We use single * for bold in standard Markdown, and ts_text (no underscores)
+                    caption=f"🌙 *Nightly Backup*\n📅 {ts_text}\n🛡 System Auto-Save",
                     parse_mode="Markdown"
                 )
         except Exception as e:
@@ -800,15 +805,18 @@ async def backup_command(update, context):
     if uid not in ADMIN_IDS:
         return  # Ignore non-admins
 
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    filename = f"backup_manual_{timestamp}.db"
+    now = datetime.now()
+    ts_file = now.strftime("%Y-%m-%d_%H-%M")
+    ts_text = now.strftime("%Y-%m-%d %H:%M")
+    
+    filename = f"backup_manual_{ts_file}.db"
 
     try:
         with open(DB_PATH, 'rb') as f:
             await update.message.reply_document(
                 document=f,
                 filename=filename,
-                caption=f"📦 **Manual Backup**\n📅 {timestamp}\n🛡 Safe and sound!",
+                caption=f"📦 *Manual Backup*\n📅 {ts_text}\n🛡 Safe and sound!",
                 parse_mode="Markdown"
             )
     except Exception as e:
@@ -915,3 +923,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
