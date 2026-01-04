@@ -456,9 +456,8 @@ async def search_add_redirect(update, context):
     
     if text == "Yes, AI Add":
         await update.message.reply_text(f"🤖 AI is processing '{word}'...")
-        # Manually set the text so the AI function sees it
-        update.message.text = word 
-        # Call the AI process directly
+        # FIX: We removed the line that caused the crash (update.message.text = word)
+        # The ai_add_process function will now automatically find 'word' in user_data
         return await ai_add_process(update, context)
         
     elif text == "Yes, Manual Add":
@@ -580,7 +579,14 @@ async def add_choice(update, context):
     return await common_cancel(update, context)
 
 async def ai_add_process(update, context):
-    word = update.message.text.strip()
+    # FIX: Check if we have a preloaded word from Search first
+    if "add_preload" in context.user_data:
+        word = context.user_data["add_preload"]
+        # We keep it in memory briefly or delete it. Let's consume it.
+        del context.user_data["add_preload"]
+    else:
+        # Normal flow: User typed the word in the chat
+        word = update.message.text.strip()
     
     # 6. Auto-delete "Analyzing"
     status_msg = await update.message.reply_text("🔍 Analyzing sources & AI...")
@@ -759,5 +765,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
