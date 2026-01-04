@@ -22,7 +22,7 @@ DAILY_POS = 34
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 ADMIN_IDS = {527164608}
-DB_PATH = "/opt/punisher-bot/db/daily_words.db"
+DB_PATH = "daily_words.db"
 
 client = Groq(api_key=GROQ_API_KEY)
 HEADERS = {
@@ -832,6 +832,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
