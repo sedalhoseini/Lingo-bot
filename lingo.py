@@ -296,6 +296,36 @@ async def save_word_list_to_db(word_list, topic="General"):
             count += 1
     return count, duplicates
 
+def pick_word_for_user(user_id):
+    with db() as c:
+        # 1. Try to find a word that hasn't been sent to this user yet
+        row = c.execute("""
+            SELECT w.*
+            FROM words w
+            LEFT JOIN sent_words s
+              ON w.id = s.word_id AND s.user_id = ?
+            WHERE s.word_id IS NULL
+            ORDER BY RANDOM()
+            LIMIT 1
+        """, (user_id,)).fetchone()
+
+        # 2. If no new words found (user saw everything), RESET history
+        if not row:
+            c.execute("DELETE FROM sent_words WHERE user_id=?", (user_id,))
+            # Try getting a word again
+            row = c.execute("""
+                SELECT w.*
+                FROM words w
+                ORDER BY RANDOM()
+                LIMIT 1
+            """).fetchone()
+            
+            if not row: return None
+
+        # 3. Mark this word as sent
+        c.execute("INSERT OR IGNORE INTO sent_words (user_id, word_id) VALUES (?,?)", (user_id, row["id"]))
+        return row
+
 async def version_command(update, context):
     await update.message.reply_text(f"🤖 *Lingo Bot v{BOT_VERSION}*\n📅 _Updated: {VERSION_DATE}_\n\n📝 *What's New:*\n{CHANGELOG}", parse_mode="Markdown")
 
@@ -729,4 +759,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
