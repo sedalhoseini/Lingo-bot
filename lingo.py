@@ -14,13 +14,12 @@ from telegram.ext import (
 )
 
 # ================= VERSION INFO =================
-BOT_VERSION = "0.3.1"
+BOT_VERSION = "0.3.2"
 VERSION_DATE = "2026-01-05"
 CHANGELOG = """
-• RESTORED: Bulk Add & Broadcast functions
-• ADDED: Source Priority Settings
-• ADDED: Multi-POS support (split definitions)
-• ADDED: Search Function
+• Fixed Start Command (Now says Welcome)
+• Database ensures user exists on start
+• All v0.3.1 features included (Search, Multi-POS)
 """
 
 # ================= STATES =================
@@ -44,8 +43,6 @@ DB_PATH = "daily_words.db"
 
 client = Groq(api_key=GROQ_API_KEY)
 HEADERS = {"User-Agent": "Mozilla/5.0"}
-
-# Default Scraper Order
 DEFAULT_SOURCES = ["Cambridge", "Merriam-Webster"]
 
 # ================= DATABASE =================
@@ -56,8 +53,7 @@ def db():
 
 def init_db():
     with db() as c:
-        c.execute("DROP TABLE IF EXISTS personal_words") # Cleanup old table
-        
+        c.execute("DROP TABLE IF EXISTS personal_words")
         c.executescript("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -69,7 +65,6 @@ def init_db():
             daily_pos TEXT,
             source_prefs TEXT
         );
-
         CREATE TABLE IF NOT EXISTS words (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             topic TEXT,
@@ -80,56 +75,38 @@ def init_db():
             level TEXT,
             source TEXT
         );
-        
         CREATE TABLE IF NOT EXISTS sent_words (
             user_id INTEGER,
             word_id INTEGER,
             PRIMARY KEY (user_id, word_id)
         );
         """)
-        try:
-            c.execute("SELECT source_prefs FROM users LIMIT 1")
-        except sqlite3.OperationalError:
-            c.execute("ALTER TABLE users ADD COLUMN source_prefs TEXT")
+        try: c.execute("SELECT source_prefs FROM users LIMIT 1")
+        except: c.execute("ALTER TABLE users ADD COLUMN source_prefs TEXT")
 
 # ================= SCRAPERS =================
 def empty_word_data(word):
-    return {
-        "word": word,
-        "parts": "Unknown",
-        "level": "Unknown",
-        "definition": None,
-        "example": None,
-        "pronunciation": None,
-        "source": None,
-    }
+    return {"word": word, "parts": "Unknown", "level": "Unknown", "definition": None, "example": None, "pronunciation": None, "source": None}
 
 def scrape_cambridge(word):
     url = f"https://dictionary.cambridge.org/dictionary/english/{word}"
     r = requests.get(url, headers=HEADERS)
     if r.status_code != 200: return []
-
     soup = BeautifulSoup(r.text, "html.parser")
     results = []
     try:
         data = empty_word_data(word)
         data["source"] = "Cambridge"
-        
         pos = soup.select_one(".pos.dpos")
         if pos: data["parts"] = pos.text.strip()
-
         level = soup.select_one(".epp-xref")
         if level: data["level"] = level.text.strip()
-
         definition = soup.select_one(".def.ddef_d")
         if definition: data["definition"] = definition.text.strip()
-
         example = soup.select_one(".examp.dexamp")
         if example: data["example"] = example.text.strip()
-
         pron = soup.select_one(".ipa")
         if pron: data["pronunciation"] = pron.text.strip()
-
         if data["definition"]: results.append(data)
     except: pass
     return results
@@ -138,25 +115,19 @@ def scrape_webster(word):
     url = f"https://www.merriam-webster.com/dictionary/{word}"
     r = requests.get(url, headers=HEADERS)
     if r.status_code != 200: return []
-
     soup = BeautifulSoup(r.text, "html.parser")
     results = []
     try:
         data = empty_word_data(word)
         data["source"] = "Merriam-Webster"
-
         pos = soup.select_one(".important-blue-link")
         if pos: data["parts"] = pos.text.strip()
-
         definition = soup.select_one(".sense.has-sn")
         if definition: data["definition"] = definition.text.strip()
-
         example = soup.select_one(".ex-sent")
         if example: data["example"] = example.text.strip()
-
         pron = soup.select_one(".pr")
         if pron: data["pronunciation"] = pron.text.strip()
-
         if data["definition"]: results.append(data)
     except: pass
     return results
@@ -164,10 +135,8 @@ def scrape_webster(word):
 SCRAPER_MAP = {"Cambridge": scrape_cambridge, "Merriam-Webster": scrape_webster}
 
 def get_words_from_web(word, user_id):
-    with db() as c:
-        row = c.execute("SELECT source_prefs FROM users WHERE user_id=?", (user_id,)).fetchone()
+    with db() as c: row = c.execute("SELECT source_prefs FROM users WHERE user_id=?", (user_id,)).fetchone()
     pref_list = json.loads(row["source_prefs"]) if row and row["source_prefs"] else DEFAULT_SOURCES
-
     for source_name in pref_list:
         scraper = SCRAPER_MAP.get(source_name)
         if scraper:
@@ -191,11 +160,7 @@ def ai_generate_full_words_list(word: str):
     ---
     Item 2...
     """
-    r = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-    )
+    r = client.chat.completions.create(model="llama-3.1-8b-instant", messages=[{"role": "user", "content": prompt}], temperature=0.3)
     return r.choices[0].message.content.strip()
 
 def parse_ai_response(text, original_word):
@@ -225,11 +190,7 @@ def ai_fill_missing(data_list):
             continue
         prompt = f"Fill missing fields (Def, Ex, Pron, Level, Pos). Return key:value.\nWord: {data['word']}\nContext: {data}"
         try:
-            r = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
-            )
+            r = client.chat.completions.create(model="llama-3.1-8b-instant", messages=[{"role": "user", "content": prompt}], temperature=0.2)
             for line in r.choices[0].message.content.splitlines():
                 if ":" in line:
                     k, v = line.split(":", 1)
@@ -243,14 +204,8 @@ def ai_fill_missing(data_list):
 
 # ================= KEYBOARDS =================
 def main_keyboard_bottom(is_admin=False):
-    kb = [
-        ["🎯 Get Word", "➕ Add Word"],
-        ["📚 List Words", "⏰ Daily Words"],
-        ["🔍 Search", "⚙️ Settings"]
-    ]
-    if is_admin:
-        kb.append(["📦 Bulk Add", "📣 Broadcast"])
-        kb.append(["🗑 Clear Words", "🛡 Backup"])
+    kb = [["🎯 Get Word", "➕ Add Word"], ["📚 List Words", "⏰ Daily Words"], ["🔍 Search", "⚙️ Settings"]]
+    if is_admin: kb.append(["📦 Bulk Add", "📣 Broadcast"]); kb.append(["🗑 Clear Words", "🛡 Backup"])
     return ReplyKeyboardMarkup(kb, resize_keyboard=True)
 
 def add_word_choice_keyboard(): return ReplyKeyboardMarkup([["Manual", "🤖 AI"], ["🏠 Cancel"]], resize_keyboard=True)
@@ -261,8 +216,7 @@ def priority_keyboard(): return ReplyKeyboardMarkup([["Cambridge First", "Webste
 # ================= HANDLERS =================
 async def common_cancel(update, context):
     context.user_data.clear()
-    uid = update.effective_user.id
-    await update.message.reply_text("🏠 Main Menu", reply_markup=main_keyboard_bottom(uid in ADMIN_IDS))
+    await update.message.reply_text("🏠 Main Menu", reply_markup=main_keyboard_bottom(update.effective_user.id in ADMIN_IDS))
     return ConversationHandler.END
 
 async def save_word_list_to_db(word_list, topic="General"):
@@ -272,18 +226,26 @@ async def save_word_list_to_db(word_list, topic="General"):
             if not w.get("definition"): continue
             parts = w.get("parts", "")
             title = w["word"]
-            if parts and parts.lower() != "unknown" and "(" not in title:
-                title = f"{title} ({parts})"
-            c.execute(
-                "INSERT INTO words (topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?)",
-                (topic, title, w.get("definition", ""), w.get("example", ""), w.get("pronunciation", ""), w.get("level", "Unknown"), w.get("source", "Manual"))
-            )
+            if parts and parts.lower() != "unknown" and "(" not in title: title = f"{title} ({parts})"
+            c.execute("INSERT INTO words (topic, word, definition, example, pronunciation, level, source) VALUES (?,?,?,?,?,?,?)",
+                (topic, title, w.get("definition", ""), w.get("example", ""), w.get("pronunciation", ""), w.get("level", "Unknown"), w.get("source", "Manual")))
             count += 1
     return count
 
 async def version_command(update, context):
     text = f"🤖 *Lingo Bot v{BOT_VERSION}*\n📅 _Updated: {VERSION_DATE}_\n\n📝 *What's New:*\n{CHANGELOG}"
     await update.message.reply_text(text, parse_mode="Markdown")
+
+# === RESTORED START FUNCTION ===
+async def start(update, context):
+    uid = update.effective_user.id
+    with db() as c: c.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
+    await update.message.reply_text(
+        "👋 *Welcome to Lingo Bot!*\n\nI am ready to help you learn English.",
+        reply_markup=main_keyboard_bottom(uid in ADMIN_IDS),
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
 
 async def main_menu_handler(update, context):
     text = update.message.text
@@ -294,45 +256,36 @@ async def main_menu_handler(update, context):
         with db() as c: row = c.execute("SELECT * FROM words ORDER BY RANDOM() LIMIT 1").fetchone()
         await send_word(update.message, row)
         return ConversationHandler.END
-
     if text == "➕ Add Word":
         await update.message.reply_text("Add Method:", reply_markup=add_word_choice_keyboard())
         return ADD_CHOICE
-
     if text == "⏰ Daily Words":
         with db() as c: u = c.execute("SELECT * FROM users WHERE user_id=?", (uid,)).fetchone()
         status_msg = "❌ *Disabled*"
         if u and u["daily_enabled"]: status_msg = f"✅ *Active*\n📅 {u['daily_count']} words at {u['daily_time']}"
         await update.message.reply_text(f"{status_msg}\n\nTo change, enter count (1-50):", reply_markup=ReplyKeyboardMarkup([["🏠 Cancel"]], resize_keyboard=True), parse_mode="Markdown")
         return DAILY_COUNT
-
     if text == "📚 List Words":
         with db() as c: rows = c.execute("SELECT topic, level, word FROM words ORDER BY topic, level LIMIT 50").fetchall()
         msg = "\n".join(f"{r['topic']} | {r['level']} | {r['word']}" for r in rows) if rows else "Empty."
         await update.message.reply_text(f"📚 *Words:*\n{msg}", parse_mode="Markdown")
         return ConversationHandler.END
-
     if text == "🔍 Search":
         await update.message.reply_text("Search by?", reply_markup=search_keyboard())
         return SEARCH_CHOICE
-
     if text == "⚙️ Settings":
         await update.message.reply_text("Settings:", reply_markup=settings_keyboard())
         return SETTINGS_CHOICE
-
     if is_admin:
-        if text == "📦 Bulk Add":
-            await update.message.reply_text("Bulk Type:", reply_markup=add_word_choice_keyboard())
-            return BULK_CHOICE
-        if text == "📣 Broadcast":
-            await update.message.reply_text("Enter message:")
-            return BROADCAST_MSG
-        if text == "🗑 Clear Words":
+        if text == "📦 Bulk Add": await update.message.reply_text("Bulk Type:", reply_markup=add_word_choice_keyboard()); return BULK_CHOICE
+        if text == "📣 Broadcast": await update.message.reply_text("Enter message:"); return BROADCAST_MSG
+        if text == "🗑 Clear Words": 
             with db() as c: c.execute("DELETE FROM words")
             await update.message.reply_text("Cleared.")
-        if text == "🛡 Backup":
-            await auto_backup(context)
+        if text == "🛡 Backup": await auto_backup(context)
 
+    # Fallback to menu
+    await update.message.reply_text("Main Menu:", reply_markup=main_keyboard_bottom(is_admin))
     return ConversationHandler.END
 
 # --- Search ---
@@ -383,9 +336,7 @@ async def daily_count_handler(update, context):
         context.user_data["daily_count"] = count
         await update.message.reply_text("Time (HH:MM)?")
         return DAILY_TIME
-    except:
-        await update.message.reply_text("Invalid. 1-50:")
-        return DAILY_COUNT
+    except: await update.message.reply_text("Invalid. 1-50:"); return DAILY_COUNT
 
 async def daily_time_handler(update, context):
     if update.message.text == "🏠 Cancel": return await common_cancel(update, context)
@@ -394,9 +345,7 @@ async def daily_time_handler(update, context):
         context.user_data["daily_time"] = update.message.text.strip()
         await update.message.reply_text("Level?", reply_markup=ReplyKeyboardMarkup([["A1","A2","B1"],["B2","C1"],["Skip"],["🏠 Cancel"]], resize_keyboard=True))
         return DAILY_LEVEL
-    except:
-        await update.message.reply_text("Invalid Time (HH:MM).")
-        return DAILY_TIME
+    except: await update.message.reply_text("Invalid Time (HH:MM)."); return DAILY_TIME
 
 async def daily_level_handler(update, context):
     if update.message.text == "🏠 Cancel": return await common_cancel(update, context)
@@ -407,22 +356,16 @@ async def daily_level_handler(update, context):
 async def daily_pos_handler(update, context):
     if update.message.text == "🏠 Cancel": return await common_cancel(update, context)
     context.user_data["daily_pos"] = None if update.message.text == "Skip" else update.message.text
-    uid = update.effective_user.id
-    d = context.user_data
-    with db() as c:
-        c.execute("INSERT INTO users (user_id, daily_enabled, daily_count, daily_time, daily_level, daily_pos) VALUES (?, 1, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET daily_enabled=1, daily_count=excluded.daily_count, daily_time=excluded.daily_time, daily_level=excluded.daily_level, daily_pos=excluded.daily_pos", (uid, d["daily_count"], d["daily_time"], d["daily_level"], d["daily_pos"]))
+    uid = update.effective_user.id; d = context.user_data
+    with db() as c: c.execute("INSERT INTO users (user_id, daily_enabled, daily_count, daily_time, daily_level, daily_pos) VALUES (?, 1, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET daily_enabled=1, daily_count=excluded.daily_count, daily_time=excluded.daily_time, daily_level=excluded.daily_level, daily_pos=excluded.daily_pos", (uid, d["daily_count"], d["daily_time"], d["daily_level"], d["daily_pos"]))
     await update.message.reply_text("✅ Daily Words Updated!")
     return await common_cancel(update, context)
 
 # --- Add Word ---
 async def add_choice(update, context):
     text = update.message.text
-    if text == "🤖 AI":
-        await update.message.reply_text("Word?")
-        return AI_ADD_INPUT
-    if text == "Manual":
-        await update.message.reply_text("Topic?")
-        return MANUAL_ADD_TOPIC
+    if text == "🤖 AI": await update.message.reply_text("Word?"); return AI_ADD_INPUT
+    if text == "Manual": await update.message.reply_text("Topic?"); return MANUAL_ADD_TOPIC
     return await common_cancel(update, context)
 
 async def ai_add_process(update, context):
@@ -432,8 +375,7 @@ async def ai_add_process(update, context):
     if not scraped:
         ai_text = ai_generate_full_words_list(word)
         scraped = parse_ai_response(ai_text, word)
-    else:
-        scraped = ai_fill_missing(scraped)
+    else: scraped = ai_fill_missing(scraped)
     count = await save_word_list_to_db(scraped)
     await update.message.reply_text(f"✅ Saved {count} entries.")
     return await common_cancel(update, context)
@@ -450,35 +392,27 @@ async def manual_add_steps(update, context):
     await update.message.reply_text("Saved.")
     return await common_cancel(update, context)
 
-# --- RESTORED: Bulk Add & Broadcast ---
+# --- Bulk & Broadcast ---
 async def bulk_choice(update, context):
     text = update.message.text
     if text == "🏠 Cancel": return await common_cancel(update, context)
-    if text == "Manual":
-        await update.message.reply_text("Send lines: topic|level|word|def|ex|pron")
-        return BULK_MANUAL
-    if text == "🤖 AI":
-        await update.message.reply_text("Send words (one per line):")
-        return BULK_AI
+    if text == "Manual": await update.message.reply_text("Send lines: topic|level|word|def|ex|pron"); return BULK_MANUAL
+    if text == "🤖 AI": await update.message.reply_text("Send words (one per line):"); return BULK_AI
     return BULK_CHOICE
 
 async def bulk_manual(update, context):
-    lines = update.message.text.splitlines()
-    count = 0
+    lines = update.message.text.splitlines(); count = 0
     with db() as c:
         for l in lines:
             p = [x.strip() for x in l.split("|")]
-            if len(p) == 6:
-                c.execute("INSERT INTO words (topic, level, word, definition, example, pronunciation, source) VALUES (?,?,?,?,?,?,?)", (*p, "Bulk"))
-                count += 1
+            if len(p) == 6: c.execute("INSERT INTO words (topic, level, word, definition, example, pronunciation, source) VALUES (?,?,?,?,?,?,?)", (*p, "Bulk")); count += 1
     await update.message.reply_text(f"Bulk added {count} words.")
     return await common_cancel(update, context)
 
 async def bulk_ai(update, context):
     words = [w.strip() for w in update.message.text.splitlines() if w.strip()]
     await update.message.reply_text(f"Processing {len(words)} words...")
-    total = 0
-    uid = update.effective_user.id
+    total = 0; uid = update.effective_user.id
     for word in words:
         scraped = get_words_from_web(word, uid)
         scraped = ai_fill_missing(scraped) if scraped else parse_ai_response(ai_generate_full_words_list(word), word)
@@ -491,18 +425,14 @@ async def broadcast_handler(update, context):
     with db() as c: users = c.execute("SELECT user_id FROM users").fetchall()
     count = 0
     for u in users:
-        try:
-            await context.bot.send_message(u["user_id"], msg)
-            count += 1
+        try: await context.bot.send_message(u["user_id"], msg); count += 1
         except: pass
     await update.message.reply_text(f"Sent to {count} users.")
     return await common_cancel(update, context)
 
 # --- System ---
 async def send_word(chat, row):
-    if not row:
-        await chat.reply_text("No word found.")
-        return
+    if not row: await chat.reply_text("No word found."); return
     text = f"📖 *{row['word']}*\n🏷 {row['level']} | {row['topic']}\n💡 {row['definition']}\n📝 _Ex: {row['example']}_\n🗣 {row['pronunciation']}"
     await chat.reply_text(text, parse_mode="Markdown")
 
@@ -533,30 +463,29 @@ def main():
     app.job_queue.run_repeating(send_daily_scheduler, interval=60, first=10)
 
     conv = ConversationHandler(
-        entry_points=[CommandHandler("start", main_menu_handler), CommandHandler("version", version_command), MessageHandler(filters.TEXT & ~filters.COMMAND, main_menu_handler)],
+        entry_points=[
+            CommandHandler("start", start), # RESTORED START COMMAND
+            CommandHandler("version", version_command),
+            CommandHandler("backup", auto_backup), # Manual trigger
+            MessageHandler(filters.TEXT & ~filters.COMMAND, main_menu_handler)
+        ],
         states={
             ADD_CHOICE: [MessageHandler(filters.TEXT, add_choice)],
             AI_ADD_INPUT: [MessageHandler(filters.TEXT, ai_add_process)],
-            
             MANUAL_ADD_TOPIC: [MessageHandler(filters.TEXT, manual_add_steps)],
             MANUAL_ADD_LEVEL: [MessageHandler(filters.TEXT, manual_add_steps)],
             MANUAL_ADD_WORD: [MessageHandler(filters.TEXT, manual_add_steps)],
             MANUAL_ADD_DEF: [MessageHandler(filters.TEXT, manual_add_steps)],
             MANUAL_ADD_EX: [MessageHandler(filters.TEXT, manual_add_steps)],
             MANUAL_ADD_PRON: [MessageHandler(filters.TEXT, manual_add_steps)],
-
             DAILY_COUNT: [MessageHandler(filters.TEXT, daily_count_handler)],
             DAILY_TIME: [MessageHandler(filters.TEXT, daily_time_handler)],
             DAILY_LEVEL: [MessageHandler(filters.TEXT, daily_level_handler)],
             DAILY_POS: [MessageHandler(filters.TEXT, daily_pos_handler)],
-
             SEARCH_CHOICE: [MessageHandler(filters.TEXT, search_choice)],
             SEARCH_QUERY: [MessageHandler(filters.TEXT, search_perform)],
-
             SETTINGS_CHOICE: [MessageHandler(filters.TEXT, settings_choice)],
             SETTINGS_PRIORITY: [MessageHandler(filters.TEXT, set_priority)],
-            
-            # RESTORED STATES
             BULK_CHOICE: [MessageHandler(filters.TEXT, bulk_choice)],
             BULK_MANUAL: [MessageHandler(filters.TEXT, bulk_manual)],
             BULK_AI: [MessageHandler(filters.TEXT, bulk_ai)],
