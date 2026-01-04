@@ -309,9 +309,19 @@ async def send_word(chat, row):
     if not row:
         await chat.reply_text("No word found.")
         return
+    
+    # Check if the word contains brackets like "word (noun)"
+    word_text = row['word']
+    if '(' in word_text and ')' in word_text:
+        part_of_speech = word_text.split('(')[-1].replace(')', '')
+        display_word = word_text.split('(')[0].strip()
+    else:
+        part_of_speech = "Not specified"
+        display_word = word_text
+
     text = (
-        f"Word: {row['word']}\n"
-        f"Part of Speech: {row['word'].split('(')[-1].replace(')', '')}\n"
+        f"Word: {display_word}\n"
+        f"Part of Speech: {part_of_speech}\n"
         f"Level: {row['level']}\n"
         f"Definition: {row['definition']}\n"
         f"Example: {row['example']}\n"
@@ -370,8 +380,8 @@ async def main_menu_handler(update, context):
     if text == "⏰ Daily Words":
         context.user_data.clear()
         await update.message.reply_text("How many words per day?")
-        return DAILY_COUNT  # new state for daily_count
-        
+        return DAILY_COUNT
+
     if text == "📚 List Words":
         await update.message.reply_text(
             "Choose list type:",
@@ -782,7 +792,6 @@ async def auto_backup(context):
                     parse_mode="Markdown"
                 )
         except Exception as e:
-            # Fixed the missing parenthesis here:
             print(f"❌ Auto-backup failed for {admin_id}: {e}")
 
 # ================= MANUAL BACKUP COMMAND =================
@@ -803,8 +812,8 @@ async def backup_command(update, context):
                 parse_mode="Markdown"
             )
     except Exception as e:
-        await update.message.reply_text(f"❌ Backup failed: {e}") 
-            
+        await update.message.reply_text(f"❌ Backup failed: {e}")
+
 # ============== Daily Words ==============
 async def send_daily_words(context):
     tehran = pytz.timezone("Asia/Tehran")
@@ -823,8 +832,15 @@ async def send_daily_words(context):
             if not word:
                 continue
 
+            # Safer formatting for daily words
+            word_text = word['word']
+            if '(' in word_text and ')' in word_text:
+                display_word = word_text.split('(')[0].strip()
+            else:
+                display_word = word_text
+
             text = (
-                f"*{word['word']}*\n"
+                f"*{display_word}*\n"
                 f"{word['definition']}\n"
                 f"_Level: {word['level']}_"
             )
@@ -854,7 +870,6 @@ def main():
     # Schedule the job
     app.job_queue.run_daily(auto_backup, time=midnight_time)
     
-    # ... (rest of your code) ...
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
@@ -900,12 +915,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
