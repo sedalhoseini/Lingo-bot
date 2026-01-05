@@ -119,46 +119,47 @@ def empty_word_data(word):
 
 def scrape_cambridge(word):
     url = f"https://dictionary.cambridge.org/dictionary/english/{word}"
-    r = requests.get(url, headers=HEADERS)
-    if r.status_code != 200: return []
-    
-    soup = BeautifulSoup(r.text, "html.parser")
-    results = []
-    
-    entries = soup.select(".pr.entry-body__el")
-    
-    for entry in entries:
-        try:
-            data = empty_word_data(word)
-            data["source"] = "Cambridge"
-            
-            pos_tag = entry.select_one(".pos.dpos")
-            if pos_tag: data["parts"] = pos_tag.text.strip()
-            
-            level_tag = entry.select_one(".epp-xref")
-            if level_tag: data["level"] = normalize_level(level_tag.text.strip())
-            
-            def_tag = entry.select_one(".def.ddef_d")
-            if def_tag: data["definition"] = def_tag.text.strip()
-            
-            ex_tag = entry.select_one(".examp.dexamp")
-            if ex_tag: data["example"] = ex_tag.text.strip()
-            
-            pron_tag = entry.select_one(".ipa")
-            if pron_tag: data["pronunciation"] = pron_tag.text.strip()
-            
-            if data["definition"]: 
-                results.append(data)
-               
-        except: pass
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=4)
+        if r.status_code != 200: return []
         
-    return results
+        soup = BeautifulSoup(r.text, "html.parser")
+        results = []
+        
+        entries = soup.select(".pr.entry-body__el")
+        
+        for entry in entries:
+            try:
+                data = empty_word_data(word)
+                data["source"] = "Cambridge"
+                
+                pos_tag = entry.select_one(".pos.dpos")
+                if pos_tag: data["parts"] = pos_tag.text.strip()
+                
+                level_tag = entry.select_one(".epp-xref")
+                if level_tag: data["level"] = normalize_level(level_tag.text.strip())
+                
+                def_tag = entry.select_one(".def.ddef_d")
+                if def_tag: data["definition"] = def_tag.text.strip()
+                
+                ex_tag = entry.select_one(".examp.dexamp")
+                if ex_tag: data["example"] = ex_tag.text.strip()
+                
+                pron_tag = entry.select_one(".ipa")
+                if pron_tag: data["pronunciation"] = pron_tag.text.strip()
+                
+                if data["definition"]: 
+                    results.append(data)
+                    # 🛑 LIMIT REMOVED
+            except: pass
+        return results
+    except: return []
+    
 def scrape_collins(word):
     clean_word = word.strip().replace(" ", "-")
     url = f"https://www.collinsdictionary.com/dictionary/english/{clean_word}"
     
     try:
-        # Added timeout=4 to prevent bot freezing
         r = requests.get(url, headers=HEADERS, timeout=4)
         if r.status_code != 200: return []
         
@@ -174,7 +175,6 @@ def scrape_collins(word):
                 pos_tag = entry.select_one(".pos")
                 if pos_tag: data["parts"] = pos_tag.text.strip()
                 
-                # Collins often uses 'coa_label' for COBUILD levels
                 level_tag = entry.select_one(".coa_label")
                 if level_tag: data["level"] = normalize_level(level_tag.text.strip())
                 
@@ -189,6 +189,7 @@ def scrape_collins(word):
                 
                 if data["definition"]:
                     results.append(data)
+                    # 🛑 LIMIT REMOVED
             except: pass
         return results
     except: return []
@@ -198,7 +199,6 @@ def scrape_longman(word):
     url = f"https://www.ldoceonline.com/dictionary/{clean_word}"
     
     try:
-        # Added timeout=4
         r = requests.get(url, headers=HEADERS, timeout=4)
         if r.status_code != 200: return []
         
@@ -206,6 +206,7 @@ def scrape_longman(word):
         results = []
         
         entries = soup.select(".ldoceEntry, .Entry")
+        
         for entry in entries:
             try:
                 data = empty_word_data(word)
@@ -214,7 +215,7 @@ def scrape_longman(word):
                 pos_tag = entry.select_one(".POS")
                 if pos_tag: data["parts"] = pos_tag.text.strip()
                 
-                level_tag = entry.select_one(".LEVEL_HEADER, .lozenge")
+                level_tag = entry.select_one(".LEVEL_HEADER, .lozenge, .tooltip")
                 if level_tag: data["level"] = normalize_level(level_tag.text.strip())
                 
                 def_tag = entry.select_one(".DEF")
@@ -228,6 +229,7 @@ def scrape_longman(word):
                 
                 if data["definition"]:
                     results.append(data)
+                    # 🛑 LIMIT REMOVED: Loop continues to find Verb/Noun etc.
             except: pass
         return results
     except: return []
@@ -942,6 +944,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
