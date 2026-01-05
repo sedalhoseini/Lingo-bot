@@ -41,10 +41,14 @@ ADMIN_IDS = {527164608}
 DB_PATH = "daily_words.db"
 
 client = Groq(api_key=GROQ_API_KEY)
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.google.com/"
+}
 
-# Only the reliable 3
-DEFAULT_SOURCES = ["Cambridge", "Merriam-Webster", "Longman"]
+# Replaced Webster with Collins
+DEFAULT_SOURCES = ["Cambridge", "Longman", "Collins"]
 
 # ================= DATABASE =================
 def db():
@@ -151,33 +155,43 @@ def scrape_cambridge(word):
         
     return results
 
-def scrape_webster(word):
-    url = f"https://www.merriam-webster.com/dictionary/{word}"
+def scrape_collins(word):
+    # Collins handles spaces with dashes
+    clean_word = word.strip().replace(" ", "-")
+    url = f"https://www.collinsdictionary.com/dictionary/english/{clean_word}"
     r = requests.get(url, headers=HEADERS)
     if r.status_code != 200: return []
     
     soup = BeautifulSoup(r.text, "html.parser")
     results = []
     
-    entries = soup.select(".entry-word-section-container")
+    # Collins uses "hom" (homograph) for different word types
+    entries = soup.select(".dict-entry .hom")
     
     for entry in entries:
         try:
             data = empty_word_data(word)
-            data["source"] = "Merriam-Webster"
+            data["source"] = "Collins"
             
-            pos_tag = entry.select_one(".important-blue-link")
+            # POS
+            pos_tag = entry.select_one(".pos")
             if pos_tag: data["parts"] = pos_tag.text.strip()
             
-            data["level"] = "Unknown" 
+            # LEVEL (Collins often puts this in a class like "coa_label")
+            # We look for the "COBUILD" definition section usually
+            level_tag = entry.select_one(".coa_label")
+            if level_tag: data["level"] = normalize_level(level_tag.text.strip())
             
-            def_tag = entry.select_one(".sense.has-sn .dtText")
-            if def_tag: data["definition"] = def_tag.text.replace(":", "").strip()
+            # DEFINITION
+            def_tag = entry.select_one(".def")
+            if def_tag: data["definition"] = def_tag.text.strip()
             
-            ex_tag = entry.select_one(".ex-sent")
+            # EXAMPLE
+            ex_tag = entry.select_one(".quote")
             if ex_tag: data["example"] = ex_tag.text.strip()
             
-            pron_tag = entry.select_one(".pr")
+            # PRONUNCIATION
+            pron_tag = entry.select_one(".pron")
             if pron_tag: data["pronunciation"] = pron_tag.text.strip()
             
             if data["definition"]:
@@ -188,10 +202,8 @@ def scrape_webster(word):
     return results
 
 def scrape_longman(word):
-    # Fix: Longman requires dashes for spaces (e.g., "make-up" not "make%20up")
     clean_word = word.strip().replace(" ", "-")
     url = f"https://www.ldoceonline.com/dictionary/{clean_word}"
-    
     r = requests.get(url, headers=HEADERS)
     if r.status_code != 200: return []
     
@@ -208,9 +220,19 @@ def scrape_longman(word):
             pos_tag = entry.select_one(".POS")
             if pos_tag: data["parts"] = pos_tag.text.strip()
             
-            level_tag = entry.select_one(".LEVEL_HEADER, .lozenge")
-            if level_tag: data["level"] = normalize_level(level_tag.text.strip())
+            # LEVEL: Improved search
+            level_tag = entry.select_one(".LEVEL_HEADER, .lozenge, .tooltip")
+            if level_tag: 
+                data["level"] = normalize_level(level_tag.text.strip())
             
+            # Fallback: If level is still Unknown, check specific level spans
+            if data["level"] == "Unknown":
+                # Sometimes it's just a span with text "A1"
+                for span in entry.select("span"):
+                    if span.text.strip() in ["A1", "A2", "B1", "B2", "C1", "C2"]:
+                        data["level"] = span.text.strip()
+                        break
+
             def_tag = entry.select_one(".DEF")
             if def_tag: data["definition"] = def_tag.text.strip()
             
@@ -234,8 +256,8 @@ def scrape_longman(word): return []
 
 SCRAPER_MAP = {
     "Cambridge": scrape_cambridge, 
-    "Merriam-Webster": scrape_webster,
-    "Longman": scrape_longman
+    "Longman": scrape_longman,
+    "Collins": scrape_collins
 }
 
 def get_words_from_web(word, user_id):
@@ -577,11 +599,11 @@ async def settings_choice(update, context):
             current_str = "Default (Cambridge, Webster, Longman)"
 
         msg = (
-            f"🔢 **Set Source Priority**\n\n"
-            f"**Your Current Order:**\n_{current_str}_\n\n"
-            "**Key:**\n"
-            "1. Cambridge\n2. Merriam-Webster\n3. Longman\n\n"
-            "**To change, send the new order (e.g., `321` for Longman first).**"
+            "🔢 **Set Source Priority**\n\n"
+            "Current Order:\n"
+            "1. Cambridge\n2. Longman\n3. Collins\n\n"  # <--- UPDATED NAMES
+            "**Send me the order using numbers (1-3).**\n"
+            "Example: `213` (Puts Longman first...)"
         )
         await update.message.reply_text(msg, reply_markup=priority_keyboard(), parse_mode="Markdown")
         return SETTINGS_PRIORITY
@@ -599,8 +621,8 @@ async def set_priority(update, context):
     # Map numbers to names
     mapping = {
         "1": "Cambridge",
-        "2": "Merriam-Webster",
-        "3": "Longman"
+        "2": "Longman",     # <--- Swapped order to match logic above
+        "3": "Collins"      # <--- New Source
     }
     
     new_order = [mapping[char] for char in text]
@@ -904,6 +926,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
