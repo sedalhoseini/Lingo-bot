@@ -125,7 +125,6 @@ def scrape_cambridge(word):
     soup = BeautifulSoup(r.text, "html.parser")
     results = []
     
-    # NEW: Loop through all entries to find Noun, Verb, Adj separately
     entries = soup.select(".pr.entry-body__el")
     
     for entry in entries:
@@ -150,10 +149,10 @@ def scrape_cambridge(word):
             
             if data["definition"]: 
                 results.append(data)
+               
         except: pass
         
     return results
-
 def scrape_collins(word):
     clean_word = word.strip().replace(" ", "-")
     url = f"https://www.collinsdictionary.com/dictionary/english/{clean_word}"
@@ -539,7 +538,7 @@ async def search_perform(update, context):
     query = update.message.text.strip()
     stype = context.user_data.get("search_type")
     
-    # 1. FIX: If bot forgot search type (due to restart), go back to menu
+    # 1. SAFETY FIX: If session is lost, restart search instead of crashing
     if not stype:
         await update.message.reply_text("⚠️ Session expired. Please select search type again.")
         return await search_choice(update, context)
@@ -550,9 +549,7 @@ async def search_perform(update, context):
     params = ()
 
     if stype == "By Word":
-        # 2. STRICT SEARCH LOGIC
-        # Finds "run" OR "run (Verb)"
-        # Does NOT find "drunk" or "runner"
+        # Strict search (Matches "Run" or "Run (Verb)", ignores "Drunk")
         sql = "SELECT * FROM words WHERE lower(word) = ? OR lower(word) LIKE ?"
         q_lower = query.lower()
         params = (q_lower, f"{q_lower} (%")
@@ -560,7 +557,6 @@ async def search_perform(update, context):
         with db() as c: rows = c.execute(sql, params).fetchall()
         
         if not rows:
-            # Not found -> Offer to Add
             context.user_data["add_preload"] = query
             await update.message.reply_text(
                 f"❌ '{query}' not found.\nDo you want to add it?",
@@ -568,17 +564,15 @@ async def search_perform(update, context):
             )
             return SEARCH_QUERY 
             
-        # Found -> Show results
         for row in rows:
             await send_word(update.message, row)
         return await common_cancel(update, context)
 
-    # 3. Handle other search types (Keep strict exact matches for these too if you want)
     elif stype == "By Level": 
-        sql = "SELECT * FROM words WHERE level = ?" # changed to exact match (=)
+        sql = "SELECT * FROM words WHERE level = ?"
         params = (query,)
     elif stype == "By Topic": 
-        sql = "SELECT * FROM words WHERE topic = ?" # changed to exact match (=)
+        sql = "SELECT * FROM words WHERE topic = ?"
         params = (query,)
     
     with db() as c: rows = c.execute(sql, params).fetchall()
@@ -948,6 +942,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
