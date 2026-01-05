@@ -5,7 +5,7 @@ import json
 from datetime import datetime, time
 import pytz
 from groq import Groq
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 import requests
 from bs4 import BeautifulSoup
 from telegram.ext import (
@@ -27,12 +27,13 @@ CHANGELOG = """
     ADD_CHOICE, AI_ADD_INPUT, 
     BROADCAST_MSG, 
     BULK_CHOICE, BULK_MANUAL, BULK_AI,
-    LIST_CHOICE,
+    LIST_CHOICE, LIST_TOPIC, # <--- Updated
     DAILY_COUNT, DAILY_TIME, DAILY_LEVEL, DAILY_POS, DAILY_TOPIC,
     SEARCH_CHOICE, SEARCH_QUERY,
     SETTINGS_CHOICE, SETTINGS_PRIORITY,
-    REPORT_MSG  # <--- NEW STATE
-) = range(23)
+    REPORT_MSG,
+    EDIT_CHOOSE, EDIT_VALUE # <--- New for editing
+) = range(26)
 
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -497,6 +498,7 @@ async def main_menu_handler(update, context):
     text = update.message.text
     uid = update.effective_user.id
     is_admin = uid in ADMIN_IDS
+    context.user_data["is_admin_flag"] = is_admin
 
     if text == "🎯 Get Word":
         # We use pick_word_for_user so it checks sent_words table (No Repeats)
@@ -505,7 +507,7 @@ async def main_menu_handler(update, context):
             await update.message.reply_text("🎉 You have seen all available words! (Resetting cycle...)")
             # Optional: You could auto-clear sent_words here if you want an endless loop
         else:
-            await send_word(update.message, word)
+            await send_word(update.message, word, is_admin)
         return ConversationHandler.END
     if text == "➕ Add Word":
         await update.message.reply_text("Add Method:", reply_markup=add_word_choice_keyboard())
@@ -520,10 +522,15 @@ async def main_menu_handler(update, context):
         await update.message.reply_text(f"{status_msg}\n\nTo change, enter count (1-50):", reply_markup=ReplyKeyboardMarkup(kb_opts, resize_keyboard=True), parse_mode="Markdown")
         return DAILY_COUNT
     if text == "📚 List Words":
-        with db() as c: rows = c.execute("SELECT topic, level, word FROM words ORDER BY topic, level LIMIT 50").fetchall()
-        msg = "\n".join(f"{r['topic']} | {r['level']} | {r['word']}" for r in rows) if rows else "Empty."
-        await update.message.reply_text(f"📚 *Words:*\n{msg}", parse_mode="Markdown")
-        return ConversationHandler.END
+        # 1. Fetch Topics
+        with db() as c: rows = c.execute("SELECT DISTINCT topic FROM words").fetchall()
+        topics = [r["topic"] for r in rows] if rows else ["General"]
+        
+        # 2. Add "All" option
+        buttons = [["🌍 All Words"]] + [topics[i:i + 2] for i in range(0, len(topics), 2)] + [["🏠 Cancel"]]
+        
+        await update.message.reply_text("📂 Choose a List to view:", reply_markup=ReplyKeyboardMarkup(buttons, resize_keyboard=True))
+        return LIST_CHOICE
     if text == "🔍 Search":
         await update.message.reply_text("Search by?", reply_markup=ReplyKeyboardMarkup([["By Word", "By Level"], ["By Topic", "🏠 Cancel"]], resize_keyboard=True))
         return SEARCH_CHOICE
@@ -619,7 +626,7 @@ async def search_perform(update, context):
                 await update.message.reply_text(f"❌ '{text}' not found in **{scope}**.", parse_mode="Markdown")
                 return await common_cancel(update, context)
             
-        for row in rows[:5]: await send_word(update.message, row)
+        for row in rows[:5]: await send_word(update.message, row, context.user_data.get("is_admin_flag", False))
         return await common_cancel(update, context)
 
     # --- HANDLE OTHER SEARCH TYPES ---
@@ -912,11 +919,17 @@ async def broadcast_handler(update, context):
     return await common_cancel(update, context)
 
 # --- System ---
-# [REPLACE THE OLD send_word FUNCTION WITH THIS]
-async def send_word(chat, row):
+async def send_word(update_obj, row, is_admin=False):
+    # Support both Message and CallbackQuery updates
+    if hasattr(update_obj, 'reply_text'):
+        message_func = update_obj.reply_text
+    else:
+        message_func = update_obj.message.reply_text
+
     if not row:
-        await chat.reply_text("No word found.")
+        await message_func("No word found.")
         return
+
     text = (
         f"📖 *{row['word']}*\n"
         f"🏷 {row['level']} | {row['topic']}\n"
@@ -925,7 +938,18 @@ async def send_word(chat, row):
         f"🗣 {row['pronunciation']}\n"
         f"📚 _Source: {row['source']}_"
     )
-    await chat.reply_text(text, parse_mode="Markdown")
+    
+    # ADMIN BUTTONS
+    kb = None
+    if is_admin:
+        wid = row['id']
+        buttons = [
+            [InlineKeyboardButton("✏️ Edit", callback_data=f"edit_start_{wid}"), 
+             InlineKeyboardButton("🗑 Delete", callback_data=f"del_conf_{wid}")]
+        ]
+        kb = InlineKeyboardMarkup(buttons)
+
+    await message_func(text, parse_mode="Markdown", reply_markup=kb)
 
 async def auto_backup(context):
     now = datetime.now()
@@ -966,6 +990,131 @@ async def send_daily_scheduler(context):
                 except: 
                     pass
 
+# --- PAGINATION SYSTEM ---
+ITEMS_PER_PAGE = 20
+
+async def list_choice_handler(update, context):
+    text = update.message.text
+    if text == "🏠 Cancel": return await common_cancel(update, context)
+    
+    # Store topic and reset page
+    context.user_data["list_topic"] = text
+    context.user_data["list_page"] = 0
+    
+    await send_list_page(update, context)
+    return LIST_TOPIC
+
+async def send_list_page(update, context, edit_msg=False):
+    topic = context.user_data.get("list_topic", "🌍 All Words")
+    page = context.user_data.get("list_page", 0)
+    offset = page * ITEMS_PER_PAGE
+    
+    # Build Query
+    query = "SELECT word, level, id FROM words"
+    params = []
+    if topic != "🌍 All Words":
+        query += " WHERE topic = ?"
+        params.append(topic)
+    
+    query += f" ORDER BY word LIMIT {ITEMS_PER_PAGE} OFFSET {offset}"
+    
+    with db() as c: rows = c.execute(query, params).fetchall()
+    
+    if not rows:
+        text = "End of list."
+        buttons = [[InlineKeyboardButton("🔙 Back to Start", callback_data="page_0")]]
+    else:
+        text = f"📂 *List: {topic}* (Page {page + 1})\n\n"
+        for r in rows:
+            text += f"▫️ {r['word']} ({r['level']})\n"
+            
+        # Navigation Buttons
+        nav_row = []
+        if page > 0: nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"page_{page-1}"))
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"page_{page+1}"))
+        buttons = [nav_row]
+
+    kb = InlineKeyboardMarkup(buttons)
+    
+    if edit_msg:
+        await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
+    else:
+        await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
+
+async def list_callback_handler(update, context):
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    if data.startswith("page_"):
+        new_page = int(data.split("_")[1])
+        context.user_data["list_page"] = new_page
+        await send_list_page(update, context, edit_msg=True)
+    return LIST_TOPIC
+
+# --- ADMIN ACTIONS ---
+
+async def admin_callback_handler(update, context):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    
+    # DELETE FLOW
+    if data.startswith("del_conf_"):
+        wid = data.split("_")[2]
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Yes, Delete", callback_data=f"del_do_{wid}"),
+            InlineKeyboardButton("❌ No", callback_data="del_cancel")
+        ]])
+        await query.edit_message_text("⚠️ Are you sure you want to delete this word?", reply_markup=kb)
+        return ConversationHandler.END
+
+    if data == "del_cancel":
+        await query.delete_message()
+        return ConversationHandler.END
+
+    if data.startswith("del_do_"):
+        wid = data.split("_")[2]
+        with db() as c: c.execute("DELETE FROM words WHERE id=?", (wid,))
+        await query.edit_message_text("🗑 Word deleted.")
+        return ConversationHandler.END
+
+    # EDIT FLOW
+    if data.startswith("edit_start_"):
+        wid = data.split("_")[2]
+        context.user_data["edit_id"] = wid
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Word", callback_data="edit_f_word"), InlineKeyboardButton("Def", callback_data="edit_f_definition")],
+            [InlineKeyboardButton("Ex", callback_data="edit_f_example"), InlineKeyboardButton("Level", callback_data="edit_f_level")],
+            [InlineKeyboardButton("Topic", callback_data="edit_f_topic")]
+        ])
+        await query.edit_message_text("Select field to edit:", reply_markup=kb)
+        return EDIT_CHOOSE
+
+    if data.startswith("edit_f_"):
+        field = data.split("_")[2]
+        context.user_data["edit_field"] = field
+        await query.edit_message_text(f"📝 Enter new value for **{field}**:", parse_mode="Markdown")
+        return EDIT_VALUE
+
+    return ConversationHandler.END
+
+async def edit_save_handler(update, context):
+    text = update.message.text
+    if text == "🏠 Cancel": return await common_cancel(update, context)
+    
+    wid = context.user_data["edit_id"]
+    field = context.user_data["edit_field"]
+    
+    with db() as c:
+        c.execute(f"UPDATE words SET {field}=? WHERE id=?", (text, wid))
+        # Fetch updated word to show result
+        row = c.execute("SELECT * FROM words WHERE id=?", (wid,)).fetchone()
+        
+    await update.message.reply_text("✅ Updated!")
+    await send_word(update.message, row, is_admin=True)
+    return ConversationHandler.END
+
 def main():
     init_db()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -997,6 +1146,15 @@ def main():
             DAILY_LEVEL: [MessageHandler(filters.TEXT, daily_level_handler)],
             DAILY_POS: [MessageHandler(filters.TEXT, daily_pos_handler)],
             DAILY_TOPIC: [MessageHandler(filters.TEXT, daily_topic_handler)],
+
+            # LIST LOGIC
+            LIST_CHOICE: [MessageHandler(filters.TEXT, list_choice_handler)],
+            LIST_TOPIC: [CallbackQueryHandler(list_callback_handler)],
+            
+            # EDIT LOGIC (Add these new ones)
+            EDIT_CHOOSE: [CallbackQueryHandler(admin_callback_handler)],
+            EDIT_VALUE: [MessageHandler(filters.TEXT, edit_save_handler)],
+            
             SEARCH_CHOICE: [MessageHandler(filters.TEXT, search_choice)],
             
             # Special handler for the search loop (Add/Query)
@@ -1013,9 +1171,11 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", common_cancel), MessageHandler(filters.Regex("^🏠 Cancel$"), common_cancel)]
     )
+    app.add_handler(CallbackQueryHandler(admin_callback_handler, pattern="^(del_|edit_)"))
     app.add_handler(conv)
     app.run_polling()
 
 if __name__ == "__main__":
     main()
+
 
