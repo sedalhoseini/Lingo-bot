@@ -28,11 +28,11 @@ CHANGELOG = """
     BROADCAST_MSG, 
     BULK_CHOICE, BULK_MANUAL, BULK_AI,
     LIST_CHOICE,
-    DAILY_COUNT, DAILY_TIME, DAILY_LEVEL, DAILY_POS,
+    DAILY_COUNT, DAILY_TIME, DAILY_LEVEL, DAILY_POS, DAILY_TOPIC,
     SEARCH_CHOICE, SEARCH_QUERY,
     SETTINGS_CHOICE, SETTINGS_PRIORITY,
     REPORT_MSG  # <--- NEW STATE
-) = range(22)
+) = range(23)
 
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -88,6 +88,8 @@ def init_db():
         """)
         try: c.execute("SELECT source_prefs FROM users LIMIT 1")
         except: c.execute("ALTER TABLE users ADD COLUMN source_prefs TEXT")
+        try: c.execute("ALTER TABLE users ADD COLUMN daily_topic TEXT")
+        except: pass
 
 # ================= LEVEL NORMALIZER =================
 def normalize_level(text):
@@ -425,8 +427,13 @@ async def save_word_list_to_db(word_list, topic="General"):
             if parts and parts.lower() != "unknown" and "(" not in title:
                 title = f"{title} ({parts})"
 
-            # 🛑 DUPLICATE CHECK 🛑
-            exists = c.execute("SELECT id FROM words WHERE lower(word) = ?", (title.lower(),)).fetchone()
+            # 🛑 NEW DUPLICATE CHECK 🛑
+            # Check ID matching BOTH Word AND Topic
+            exists = c.execute(
+                "SELECT id FROM words WHERE lower(word) = ? AND topic = ?", 
+                (title.lower(), topic)
+            ).fetchone()
+            
             if exists:
                 duplicates += 1
                 continue # Skip this word
@@ -440,31 +447,40 @@ async def save_word_list_to_db(word_list, topic="General"):
 
 def pick_word_for_user(user_id):
     with db() as c:
-        # 1. Try to find a word that hasn't been sent to this user yet
-        row = c.execute("""
-            SELECT w.*
-            FROM words w
-            LEFT JOIN sent_words s
-              ON w.id = s.word_id AND s.user_id = ?
+        # 1. Get User Preferences
+        u = c.execute("SELECT daily_level, daily_pos, daily_topic FROM users WHERE user_id=?", (user_id,)).fetchone()
+        
+        # 2. Build Query
+        query = """
+            SELECT w.* FROM words w
+            LEFT JOIN sent_words s ON w.id = s.word_id AND s.user_id = ?
             WHERE s.word_id IS NULL
-            ORDER BY RANDOM()
-            LIMIT 1
-        """, (user_id,)).fetchone()
+        """
+        params = [user_id]
 
-        # 2. If no new words found (user saw everything), RESET history
+        # Filters
+        if u and u["daily_level"] and u["daily_level"] != "Skip":
+            query += " AND w.level = ?"
+            params.append(u["daily_level"])
+
+        if u and u["daily_pos"] and u["daily_pos"] != "Skip":
+            query += " AND lower(w.word) LIKE ?"
+            params.append(f"%({u['daily_pos']})%")
+
+        # TOPIC FILTER
+        if u and u["daily_topic"] and u["daily_topic"] != "🌍 All Sources":
+            query += " AND w.topic = ?"
+            params.append(u["daily_topic"])
+
+        query += " ORDER BY RANDOM() LIMIT 1"
+
+        # 3. Execute & Reset Logic
+        row = c.execute(query, params).fetchone()
         if not row:
             c.execute("DELETE FROM sent_words WHERE user_id=?", (user_id,))
-            # Try getting a word again
-            row = c.execute("""
-                SELECT w.*
-                FROM words w
-                ORDER BY RANDOM()
-                LIMIT 1
-            """).fetchone()
-            
+            row = c.execute(query, params).fetchone()
             if not row: return None
 
-        # 3. Mark this word as sent
         c.execute("INSERT OR IGNORE INTO sent_words (user_id, word_id) VALUES (?,?)", (user_id, row["id"]))
         return row
 
@@ -536,62 +552,83 @@ async def search_choice(update, context):
     
     context.user_data["search_type"] = text
     
-    # 9. Smart Keyboards for Search
-    if text == "By Level":
+    if text == "By Word":
+        # 1. NEW: Fetch available Topics (Books)
+        with db() as c: rows = c.execute("SELECT DISTINCT topic FROM words").fetchall()
+        topics = [r["topic"] for r in rows] if rows else ["General"]
+        
+        # 2. Create Dynamic Buttons: [All Sources] + [Book 1] + [Book 2]...
+        buttons = [["🌍 All Sources"]] + [topics[i:i + 2] for i in range(0, len(topics), 2)] + [["🏠 Cancel"]]
+        
+        await update.message.reply_text("📚 Select Search Scope:", reply_markup=ReplyKeyboardMarkup(buttons, resize_keyboard=True))
+    
+    elif text == "By Level":
         await update.message.reply_text("Choose Level:", reply_markup=ReplyKeyboardMarkup([["A1", "A2"], ["B1", "B2"], ["C1", "C2"], ["🏠 Cancel"]], resize_keyboard=True))
+    
     elif text == "By Topic":
         with db() as c: rows = c.execute("SELECT DISTINCT topic FROM words LIMIT 6").fetchall()
         topics = [r["topic"] for r in rows] if rows else ["General"]
-        # Create grid
         kb = [topics[i:i + 2] for i in range(0, len(topics), 2)]
         kb.append(["🏠 Cancel"])
         await update.message.reply_text("Choose Topic:", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
-    else:
-        # By Word
-        await update.message.reply_text("Enter word:", reply_markup=ReplyKeyboardMarkup([["🏠 Cancel"]], resize_keyboard=True))
         
     return SEARCH_QUERY
 
 async def search_perform(update, context):
-    query = update.message.text.strip()
+    text = update.message.text.strip()
     stype = context.user_data.get("search_type")
     
-    # 1. SAFETY FIX: If session is lost, restart search instead of crashing
+    if text == "🏠 Cancel": return await common_cancel(update, context)
     if not stype:
         await update.message.reply_text("⚠️ Session expired. Please select search type again.")
-        return await search_choice(update, context)
+        return await common_cancel(update, context)
 
-    if query == "🏠 Cancel": return await common_cancel(update, context)
-
-    sql = ""
-    params = ()
-
+    # --- HANDLE "BY WORD" (2 Steps: Scope -> Query) ---
     if stype == "By Word":
-        # Strict search (Matches "Run" or "Run (Verb)", ignores "Drunk")
-        sql = "SELECT * FROM words WHERE lower(word) = ? OR lower(word) LIKE ?"
-        q_lower = query.lower()
-        params = (q_lower, f"{q_lower} (%")
+        # Step A: User just picked the Scope (e.g., "504 Words" or "All Sources")
+        if "search_scope" not in context.user_data:
+            context.user_data["search_scope"] = text
+            await update.message.reply_text(f"🔍 Scope: {text}\nNow enter the **Word**:", parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup([["🏠 Cancel"]], resize_keyboard=True))
+            return SEARCH_QUERY # Stay in loop to wait for the word
+            
+        # Step B: User entered the actual Word
+        scope = context.user_data["search_scope"]
         
+        # Search SQL
+        sql = "SELECT * FROM words WHERE (lower(word) = ? OR lower(word) LIKE ?)"
+        q_lower = text.lower()
+        params = [q_lower, f"{q_lower} (%"]
+        
+        # Apply Book Filter (unless searching everything)
+        if scope != "🌍 All Sources":
+            sql += " AND topic = ?"
+            params.append(scope)
+            
         with db() as c: rows = c.execute(sql, params).fetchall()
         
         if not rows:
-            context.user_data["add_preload"] = query
-            await update.message.reply_text(
-                f"❌ '{query}' not found.\nDo you want to add it?",
-                reply_markup=ReplyKeyboardMarkup([["Yes, AI Add"], ["Yes, Manual Add"], ["🏠 Cancel"]], resize_keyboard=True)
-            )
-            return SEARCH_QUERY 
+            # Not found logic
+            if scope in ["🌍 All Sources", "General"]:
+                context.user_data["add_preload"] = text
+                await update.message.reply_text(
+                    f"❌ '{text}' not found in {scope}.\nDo you want to add it?",
+                    reply_markup=ReplyKeyboardMarkup([["Yes, AI Add"], ["Yes, Manual Add"], ["🏠 Cancel"]], resize_keyboard=True)
+                )
+                return SEARCH_QUERY
+            else:
+                await update.message.reply_text(f"❌ '{text}' not found in **{scope}**.", parse_mode="Markdown")
+                return await common_cancel(update, context)
             
-        for row in rows:
-            await send_word(update.message, row)
+        for row in rows[:5]: await send_word(update.message, row)
         return await common_cancel(update, context)
 
+    # --- HANDLE OTHER SEARCH TYPES ---
     elif stype == "By Level": 
         sql = "SELECT * FROM words WHERE level = ?"
-        params = (query,)
+        params = (text,)
     elif stype == "By Topic": 
         sql = "SELECT * FROM words WHERE topic = ?"
-        params = (query,)
+        params = (text,)
     
     with db() as c: rows = c.execute(sql, params).fetchall()
     
@@ -613,10 +650,8 @@ async def search_add_redirect(update, context):
     elif text == "Yes, Manual Add":
         context.user_data["manual_step"] = 0
         context.user_data["topic"] = "General"
-        # Manually set the Topic to "General" so we skip to Level
-        context.user_data["topic"] = "General" 
         await update.message.reply_text(f"Adding '{word}'.\nWhat is the **Level**? (A1-C2)")
-        return MANUAL_ADD_LEVEL # Skip topic, go straight to Level
+        return MANUAL_ADD_LEVEL
         
     else:
         return await common_cancel(update, context)
@@ -721,9 +756,32 @@ async def daily_level_handler(update, context):
 async def daily_pos_handler(update, context):
     if update.message.text == "🏠 Cancel": return await common_cancel(update, context)
     context.user_data["daily_pos"] = None if update.message.text == "Skip" else update.message.text
-    uid = update.effective_user.id; d = context.user_data
-    with db() as c: c.execute("INSERT INTO users (user_id, daily_enabled, daily_count, daily_time, daily_level, daily_pos) VALUES (?, 1, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET daily_enabled=1, daily_count=excluded.daily_count, daily_time=excluded.daily_time, daily_level=excluded.daily_level, daily_pos=excluded.daily_pos", (uid, d["daily_count"], d["daily_time"], d["daily_level"], d["daily_pos"]))
-    await update.message.reply_text("✅ Daily Words Updated!")
+    
+    # Fetch Topics
+    with db() as c: rows = c.execute("SELECT DISTINCT topic FROM words").fetchall()
+    topics = [r["topic"] for r in rows] if rows else ["General"]
+    
+    buttons = [["🌍 All Sources"]] + [topics[i:i + 2] for i in range(0, len(topics), 2)] + [["🏠 Cancel"]]
+    await update.message.reply_text("📚 Which Book/Topic?", reply_markup=ReplyKeyboardMarkup(buttons, resize_keyboard=True))
+    return DAILY_TOPIC
+
+async def daily_topic_handler(update, context):
+    if update.message.text == "🏠 Cancel": return await common_cancel(update, context)
+    context.user_data["daily_topic"] = update.message.text
+    
+    d = context.user_data
+    uid = update.effective_user.id
+    
+    with db() as c:
+        c.execute("""
+            INSERT INTO users (user_id, daily_enabled, daily_count, daily_time, daily_level, daily_pos, daily_topic)
+            VALUES (?, 1, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET 
+            daily_enabled=1, daily_count=excluded.daily_count, daily_time=excluded.daily_time, 
+            daily_level=excluded.daily_level, daily_pos=excluded.daily_pos, daily_topic=excluded.daily_topic
+        """, (uid, d["daily_count"], d["daily_time"], d["daily_level"], d["daily_pos"], d["daily_topic"]))
+        
+    await update.message.reply_text(f"✅ Daily Updated!\nBook: {d['daily_topic']}")
     return await common_cancel(update, context)
 
 # --- Add Word ---
@@ -938,7 +996,7 @@ def main():
             DAILY_TIME: [MessageHandler(filters.TEXT, daily_time_handler)],
             DAILY_LEVEL: [MessageHandler(filters.TEXT, daily_level_handler)],
             DAILY_POS: [MessageHandler(filters.TEXT, daily_pos_handler)],
-
+            DAILY_TOPIC: [MessageHandler(filters.TEXT, daily_topic_handler)],
             SEARCH_CHOICE: [MessageHandler(filters.TEXT, search_choice)],
             
             # Special handler for the search loop (Add/Query)
@@ -960,26 +1018,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
