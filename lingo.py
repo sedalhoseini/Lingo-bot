@@ -42,7 +42,8 @@ DB_PATH = "daily_words.db"
 
 client = Groq(api_key=GROQ_API_KEY)
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.google.com/"
 }
@@ -156,98 +157,92 @@ def scrape_cambridge(word):
     return results
 
 def scrape_collins(word):
-    # Collins handles spaces with dashes
+    # Collins uses dashes for spaces (e.g. "make-up")
     clean_word = word.strip().replace(" ", "-")
     url = f"https://www.collinsdictionary.com/dictionary/english/{clean_word}"
-    r = requests.get(url, headers=HEADERS)
-    if r.status_code != 200: return []
     
-    soup = BeautifulSoup(r.text, "html.parser")
-    results = []
-    
-    # Collins uses "hom" (homograph) for different word types
-    entries = soup.select(".dict-entry .hom")
-    
-    for entry in entries:
-        try:
-            data = empty_word_data(word)
-            data["source"] = "Collins"
-            
-            # POS
-            pos_tag = entry.select_one(".pos")
-            if pos_tag: data["parts"] = pos_tag.text.strip()
-            
-            # LEVEL (Collins often puts this in a class like "coa_label")
-            # We look for the "COBUILD" definition section usually
-            level_tag = entry.select_one(".coa_label")
-            if level_tag: data["level"] = normalize_level(level_tag.text.strip())
-            
-            # DEFINITION
-            def_tag = entry.select_one(".def")
-            if def_tag: data["definition"] = def_tag.text.strip()
-            
-            # EXAMPLE
-            ex_tag = entry.select_one(".quote")
-            if ex_tag: data["example"] = ex_tag.text.strip()
-            
-            # PRONUNCIATION
-            pron_tag = entry.select_one(".pron")
-            if pron_tag: data["pronunciation"] = pron_tag.text.strip()
-            
-            if data["definition"]:
-                results.append(data)
-                if len(results) >= 3: break
-        except: pass
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=5)
+        if r.status_code != 200: return []
         
-    return results
+        soup = BeautifulSoup(r.text, "html.parser")
+        results = []
+        
+        # Collins COBUILD section (Best for learners)
+        entries = soup.select(".dict-entry")
+        
+        for entry in entries:
+            try:
+                data = empty_word_data(word)
+                data["source"] = "Collins"
+                
+                # POS
+                pos_tag = entry.select_one(".pos")
+                if pos_tag: data["parts"] = pos_tag.text.strip()
+                
+                # LEVEL (Look for circles like 'A1', 'B2')
+                level_tag = entry.select_one(".coa_label")
+                if level_tag: data["level"] = normalize_level(level_tag.text.strip())
+                
+                # DEF
+                def_tag = entry.select_one(".def")
+                if def_tag: data["definition"] = def_tag.text.strip()
+                
+                # EX
+                ex_tag = entry.select_one(".quote")
+                if ex_tag: data["example"] = ex_tag.text.strip()
+                
+                # PRON
+                pron_tag = entry.select_one(".pron")
+                if pron_tag: data["pronunciation"] = pron_tag.text.strip()
+                
+                if data["definition"]:
+                    results.append(data)
+                    if len(results) >= 3: break
+            except: pass
+        return results
+    except: return []
 
 def scrape_longman(word):
     clean_word = word.strip().replace(" ", "-")
     url = f"https://www.ldoceonline.com/dictionary/{clean_word}"
-    r = requests.get(url, headers=HEADERS)
-    if r.status_code != 200: return []
     
-    soup = BeautifulSoup(r.text, "html.parser")
-    results = []
-    
-    entries = soup.select(".ldoceEntry, .Entry")
-    
-    for entry in entries:
-        try:
-            data = empty_word_data(word)
-            data["source"] = "Longman"
-            
-            pos_tag = entry.select_one(".POS")
-            if pos_tag: data["parts"] = pos_tag.text.strip()
-            
-            # LEVEL: Improved search
-            level_tag = entry.select_one(".LEVEL_HEADER, .lozenge, .tooltip")
-            if level_tag: 
-                data["level"] = normalize_level(level_tag.text.strip())
-            
-            # Fallback: If level is still Unknown, check specific level spans
-            if data["level"] == "Unknown":
-                # Sometimes it's just a span with text "A1"
-                for span in entry.select("span"):
-                    if span.text.strip() in ["A1", "A2", "B1", "B2", "C1", "C2"]:
-                        data["level"] = span.text.strip()
-                        break
-
-            def_tag = entry.select_one(".DEF")
-            if def_tag: data["definition"] = def_tag.text.strip()
-            
-            ex_tag = entry.select_one(".EXAMPLE")
-            if ex_tag: data["example"] = ex_tag.text.strip()
-            
-            pron_tag = entry.select_one(".PRON")
-            if pron_tag: data["pronunciation"] = pron_tag.text.strip()
-            
-            if data["definition"]:
-                results.append(data)
-                if len(results) >= 3: break
-        except: pass
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=5)
+        if r.status_code != 200: return []
         
-    return results
+        soup = BeautifulSoup(r.text, "html.parser")
+        results = []
+        
+        entries = soup.select(".ldoceEntry, .Entry")
+        
+        for entry in entries:
+            try:
+                data = empty_word_data(word)
+                data["source"] = "Longman"
+                
+                pos_tag = entry.select_one(".POS")
+                if pos_tag: data["parts"] = pos_tag.text.strip()
+                
+                # Level
+                level_tag = entry.select_one(".LEVEL_HEADER, .lozenge, .tooltip")
+                if level_tag: data["level"] = normalize_level(level_tag.text.strip())
+                
+                def_tag = entry.select_one(".DEF")
+                if def_tag: data["definition"] = def_tag.text.strip()
+                
+                ex_tag = entry.select_one(".EXAMPLE")
+                if ex_tag: data["example"] = ex_tag.text.strip()
+                
+                pron_tag = entry.select_one(".PRON")
+                if pron_tag: data["pronunciation"] = pron_tag.text.strip()
+                
+                if data["definition"]:
+                    results.append(data)
+                    if len(results) >= 3: break
+            except: pass
+        return results
+    except: return []
     
 # Placeholders for others
 def scrape_oxford(word): return []
@@ -586,24 +581,20 @@ async def search_add_redirect(update, context):
 async def settings_choice(update, context):
     if update.message.text == "🔄 Source Priority":
         uid = update.effective_user.id
-        
-        # 1. Fetch current settings from DB
         with db() as c:
             row = c.execute("SELECT source_prefs FROM users WHERE user_id=?", (uid,)).fetchone()
-            
-        # 2. Format the display
+        
         if row and row["source_prefs"]:
-            current_list = json.loads(row["source_prefs"])
-            current_str = ", ".join(current_list)
+            current_str = ", ".join(json.loads(row["source_prefs"]))
         else:
-            current_str = "Default (Cambridge, Webster, Longman)"
+            current_str = "Default"
 
         msg = (
-            "🔢 **Set Source Priority**\n\n"
-            "Current Order:\n"
-            "1. Cambridge\n2. Longman\n3. Collins\n\n"  # <--- UPDATED NAMES
-            "**Send me the order using numbers (1-3).**\n"
-            "Example: `213` (Puts Longman first...)"
+            f"🔢 **Set Source Priority**\n\n"
+            f"**Current:** {current_str}\n\n"
+            "**Key:**\n"
+            "1. Cambridge\n2. Longman\n3. Collins\n\n"
+            "**Send order (e.g., `213` for Longman first).**"
         )
         await update.message.reply_text(msg, reply_markup=priority_keyboard(), parse_mode="Markdown")
         return SETTINGS_PRIORITY
@@ -613,16 +604,15 @@ async def set_priority(update, context):
     text = update.message.text.strip()
     if text == "🏠 Cancel": return await common_cancel(update, context)
     
-    # Validation: Must be 3 digits containing 1, 2, and 3
     if not re.fullmatch(r"[1-3]{3}", text) or len(set(text)) != 3:
-        await update.message.reply_text("❌ Invalid format. Send 3 unique numbers (e.g., `123` or `312`).")
+        await update.message.reply_text("❌ Invalid. Send 3 unique numbers (e.g., `213`).")
         return SETTINGS_PRIORITY
 
-    # Map numbers to names
+    # Updated Map with Collins
     mapping = {
         "1": "Cambridge",
-        "2": "Longman",     # <--- Swapped order to match logic above
-        "3": "Collins"      # <--- New Source
+        "2": "Longman",
+        "3": "Collins"
     }
     
     new_order = [mapping[char] for char in text]
@@ -631,7 +621,7 @@ async def set_priority(update, context):
     with db() as c:
         c.execute("UPDATE users SET source_prefs=? WHERE user_id=?", (json.dumps(new_order), uid))
         
-    await update.message.reply_text(f"✅ Priority Saved:\n1. {new_order[0]}\n2. {new_order[1]}...")
+    await update.message.reply_text(f"✅ Saved Priority:\n1. {new_order[0]}\n2. {new_order[1]}...")
     return await common_cancel(update, context)
 
 # --- Report ---
@@ -926,6 +916,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
