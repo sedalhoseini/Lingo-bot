@@ -150,7 +150,6 @@ def scrape_cambridge(word):
             
             if data["definition"]: 
                 results.append(data)
-                if len(results) >= 3: break
         except: pass
         
     return results
@@ -191,7 +190,6 @@ def scrape_collins(word):
                 
                 if data["definition"]:
                     results.append(data)
-                    if len(results) >= 3: break
             except: pass
         return results
     except: return []
@@ -231,7 +229,6 @@ def scrape_longman(word):
                 
                 if data["definition"]:
                     results.append(data)
-                    if len(results) >= 3: break
             except: pass
         return results
     except: return []
@@ -542,11 +539,12 @@ async def search_perform(update, context):
     query = update.message.text.strip()
     stype = context.user_data.get("search_type")
     
-    # 1. Safety Check (Fixes the crash from logs)
-    if query == "🏠 Cancel": return await common_cancel(update, context)
+    # 1. FIX: If bot forgot search type (due to restart), go back to menu
     if not stype:
-        await update.message.reply_text("⚠️ Session expired. Please choose search type again.")
+        await update.message.reply_text("⚠️ Session expired. Please select search type again.")
         return await search_choice(update, context)
+
+    if query == "🏠 Cancel": return await common_cancel(update, context)
 
     sql = ""
     params = ()
@@ -950,6 +948,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
