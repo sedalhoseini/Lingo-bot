@@ -768,12 +768,33 @@ async def auto_backup(context):
 async def send_daily_scheduler(context):
     tehran = pytz.timezone("Asia/Tehran")
     now_str = datetime.now(tehran).strftime("%H:%M")
-    with db() as c: users = c.execute("SELECT * FROM users WHERE daily_enabled=1 AND daily_time=?", (now_str,)).fetchall()
+    
+    # 1. Get users scheduled for NOW
+    with db() as c: 
+        users = c.execute("SELECT * FROM users WHERE daily_enabled=1 AND daily_time=?", (now_str,)).fetchall()
+    
     for u in users:
+        user_id = u["user_id"]
+        
         for _ in range(u["daily_count"]):
-            with db() as c: w = c.execute("SELECT * FROM words ORDER BY RANDOM() LIMIT 1").fetchone()
-            try: await send_word(context.bot, w)
-            except: pass
+            # 2. Use the Smart Picker (Avoids Repeats)
+            word_row = pick_word_for_user(user_id)
+            
+            if word_row:
+                # 3. Format the text manually (since we can't use the reply helper)
+                text = (
+                    f"📖 *{word_row['word']}*\n"
+                    f"🏷 {word_row['level']} | {word_row['topic']}\n"
+                    f"💡 {word_row['definition']}\n"
+                    f"📝 _Ex: {word_row['example']}_\n"
+                    f"🗣 {word_row['pronunciation']}\n"
+                    f"📚 _Source: {word_row['source']}_"
+                )
+                try:
+                    # 4. Send directly to the User ID
+                    await context.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown")
+                except: 
+                    pass
 
 def main():
     init_db()
@@ -827,6 +848,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
