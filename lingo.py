@@ -188,7 +188,10 @@ def scrape_webster(word):
     return results
 
 def scrape_longman(word):
-    url = f"https://www.ldoceonline.com/dictionary/{word}"
+    # Fix: Longman requires dashes for spaces (e.g., "make-up" not "make%20up")
+    clean_word = word.strip().replace(" ", "-")
+    url = f"https://www.ldoceonline.com/dictionary/{clean_word}"
+    
     r = requests.get(url, headers=HEADERS)
     if r.status_code != 200: return []
     
@@ -290,9 +293,23 @@ def ai_fill_missing(data_list):
     if not data_list: return []
     filled_list = []
     
+    # 1. SMART PRE-FILL: Check if ANY item has pronunciation/audio
+    # If "Big (Adj)" has audio, copy it to "Big (Noun)" so we don't say "None"
+    shared_pron = None
     for data in data_list:
+        if data.get("pronunciation") and data["pronunciation"] != "Unknown":
+            shared_pron = data["pronunciation"]
+            break
+    
+    for data in data_list:
+        # Check levels first
         data["level"] = normalize_level(data.get("level"))
         
+        # Apply shared pronunciation if missing
+        if (not data.get("pronunciation") or data["pronunciation"] == "Unknown") and shared_pron:
+            data["pronunciation"] = shared_pron
+
+        # Now check what is still missing
         missing = [k for k, v in data.items() if v is None or v == "Unknown"]
         
         if not missing:
@@ -310,6 +327,7 @@ def ai_fill_missing(data_list):
         Level: [Value]
         Def: [Value]
         Ex: [Value]
+        Pron: [Value]
         """
         try:
             r = client.chat.completions.create(model="llama-3.1-8b-instant", messages=[{"role": "user", "content": prompt}], temperature=0.2)
@@ -321,7 +339,7 @@ def ai_fill_missing(data_list):
                     if "level" in k and data["level"] == "Unknown": data["level"] = normalize_level(v)
                     if "def" in k and not data["definition"]: data["definition"] = v
                     if "ex" in k and not data["example"]: data["example"] = v
-                    if "pron" in k and not data["pronunciation"]: data["pronunciation"] = v
+                    if "pron" in k and (not data["pronunciation"] or data["pronunciation"] == "Unknown"): data["pronunciation"] = v
                     if "pos" in k and (not data["parts"] or data["parts"]=="Unknown"): data["parts"] = v
         except: pass
         filled_list.append(data)
@@ -545,12 +563,25 @@ async def search_add_redirect(update, context):
 # --- Settings ---
 async def settings_choice(update, context):
     if update.message.text == "🔄 Source Priority":
+        uid = update.effective_user.id
+        
+        # 1. Fetch current settings from DB
+        with db() as c:
+            row = c.execute("SELECT source_prefs FROM users WHERE user_id=?", (uid,)).fetchone()
+            
+        # 2. Format the display
+        if row and row["source_prefs"]:
+            current_list = json.loads(row["source_prefs"])
+            current_str = ", ".join(current_list)
+        else:
+            current_str = "Default (Cambridge, Webster, Longman)"
+
         msg = (
-            "🔢 **Set Source Priority**\n\n"
-            "Current Order:\n"
+            f"🔢 **Set Source Priority**\n\n"
+            f"**Your Current Order:**\n_{current_str}_\n\n"
+            "**Key:**\n"
             "1. Cambridge\n2. Merriam-Webster\n3. Longman\n\n"
-            "**Send me the order using numbers (1-3).**\n"
-            "Example: `312` (Puts Longman first, then Cambridge...)"
+            "**To change, send the new order (e.g., `321` for Longman first).**"
         )
         await update.message.reply_text(msg, reply_markup=priority_keyboard(), parse_mode="Markdown")
         return SETTINGS_PRIORITY
@@ -873,6 +904,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
