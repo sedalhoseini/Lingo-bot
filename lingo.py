@@ -1131,43 +1131,46 @@ def main():
             MessageHandler(filters.TEXT & ~filters.COMMAND, main_menu_handler)
         ],
         states={
-            ADD_CHOICE: [MessageHandler(filters.TEXT, add_choice)],
-            AI_ADD_INPUT: [MessageHandler(filters.TEXT, ai_add_process)],
+            ADD_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_choice)],
+            AI_ADD_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ai_add_process)],
             
-            MANUAL_ADD_TOPIC: [MessageHandler(filters.TEXT, manual_add_steps)],
-            MANUAL_ADD_LEVEL: [MessageHandler(filters.TEXT, manual_add_steps)],
-            MANUAL_ADD_WORD: [MessageHandler(filters.TEXT, manual_add_steps)],
-            MANUAL_ADD_DEF: [MessageHandler(filters.TEXT, manual_add_steps)],
-            MANUAL_ADD_EX: [MessageHandler(filters.TEXT, manual_add_steps)],
-            MANUAL_ADD_PRON: [MessageHandler(filters.TEXT, manual_add_steps)],
+            MANUAL_ADD_TOPIC: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_add_steps)],
+            MANUAL_ADD_LEVEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_add_steps)],
+            MANUAL_ADD_WORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_add_steps)],
+            MANUAL_ADD_DEF: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_add_steps)],
+            MANUAL_ADD_EX: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_add_steps)],
+            MANUAL_ADD_PRON: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_add_steps)],
 
-            DAILY_COUNT: [MessageHandler(filters.TEXT, daily_count_handler)],
-            DAILY_TIME: [MessageHandler(filters.TEXT, daily_time_handler)],
-            DAILY_LEVEL: [MessageHandler(filters.TEXT, daily_level_handler)],
-            DAILY_POS: [MessageHandler(filters.TEXT, daily_pos_handler)],
-            DAILY_TOPIC: [MessageHandler(filters.TEXT, daily_topic_handler)],
+            DAILY_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, daily_count_handler)],
+            DAILY_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, daily_time_handler)],
+            DAILY_LEVEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, daily_level_handler)],
+            DAILY_POS: [MessageHandler(filters.TEXT & ~filters.COMMAND, daily_pos_handler)],
+            DAILY_TOPIC: [MessageHandler(filters.TEXT & ~filters.COMMAND, daily_topic_handler)],
 
             # LIST LOGIC
-            LIST_CHOICE: [MessageHandler(filters.TEXT, list_choice_handler)],
+            LIST_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, list_choice_handler)],
             LIST_TOPIC: [CallbackQueryHandler(list_callback_handler)],
             
-            # EDIT LOGIC (Add these new ones)
+            # EDIT LOGIC
             EDIT_CHOOSE: [CallbackQueryHandler(admin_callback_handler)],
-            EDIT_VALUE: [MessageHandler(filters.TEXT, edit_save_handler)],
+            EDIT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_save_handler)],
             
-            SEARCH_CHOICE: [MessageHandler(filters.TEXT, search_choice)],
+            SEARCH_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, search_choice)],
             
-            # Special handler for the search loop (Add/Query)
-            SEARCH_QUERY: [MessageHandler(filters.Regex("^(Yes, AI Add|Yes, Manual Add)$"), search_add_redirect), MessageHandler(filters.TEXT, search_perform)],
+            # SEARCH QUERY (Note the change in the second handler below)
+            SEARCH_QUERY: [
+                MessageHandler(filters.Regex("^(Yes, AI Add|Yes, Manual Add)$"), search_add_redirect), 
+                MessageHandler(filters.TEXT & ~filters.COMMAND, search_perform)
+            ],
 
-            SETTINGS_CHOICE: [MessageHandler(filters.TEXT, settings_choice)],
-            SETTINGS_PRIORITY: [MessageHandler(filters.TEXT, set_priority)],
-            REPORT_MSG: [MessageHandler(filters.TEXT, report_handler)],
+            SETTINGS_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_choice)],
+            SETTINGS_PRIORITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_priority)],
+            REPORT_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, report_handler)],
             
-            BULK_CHOICE: [MessageHandler(filters.TEXT, bulk_choice)],
-            BULK_MANUAL: [MessageHandler(filters.TEXT, bulk_manual)],
-            BULK_AI: [MessageHandler(filters.TEXT, bulk_ai)],
-            BROADCAST_MSG: [MessageHandler(filters.TEXT, broadcast_handler)],
+            BULK_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, bulk_choice)],
+            BULK_MANUAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, bulk_manual)],
+            BULK_AI: [MessageHandler(filters.TEXT & ~filters.COMMAND, bulk_ai)],
+            BROADCAST_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_handler)],
         },
         fallbacks=[
             CommandHandler("cancel", common_cancel), 
@@ -1181,6 +1184,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
