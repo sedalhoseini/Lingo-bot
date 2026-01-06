@@ -1169,7 +1169,11 @@ def main():
             BULK_AI: [MessageHandler(filters.TEXT, bulk_ai)],
             BROADCAST_MSG: [MessageHandler(filters.TEXT, broadcast_handler)],
         },
-        fallbacks=[CommandHandler("cancel", common_cancel), MessageHandler(filters.Regex("^🏠 Cancel$"), common_cancel)]
+        fallbacks=[
+            CommandHandler("cancel", common_cancel), 
+            MessageHandler(filters.Regex("^🏠 Cancel$"), common_cancel),
+            CommandHandler("start", start)  # <--- THIS LINE FIXES IT
+        ]
     )
     app.add_handler(CallbackQueryHandler(admin_callback_handler, pattern="^(del_|edit_)"))
     app.add_handler(conv)
@@ -1177,5 +1181,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
