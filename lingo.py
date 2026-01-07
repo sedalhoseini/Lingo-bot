@@ -87,6 +87,7 @@ def init_db():
             PRIMARY KEY (user_id, word_id)
         );
         """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_topic ON words (topic)")
         try: c.execute("SELECT source_prefs FROM users LIMIT 1")
         except: c.execute("ALTER TABLE users ADD COLUMN source_prefs TEXT")
         try: c.execute("ALTER TABLE users ADD COLUMN daily_topic TEXT")
@@ -905,19 +906,21 @@ async def daily_pos_handler(update, context):
         return await daily_topic_entry(update, context)
 
 # Helper to enter topic state
-# Helper to enter topic state
 async def daily_topic_entry(update, context):
-    # Fetch Topics
+    # 1. Fetch Topics ONCE and Cache them
     with db() as c: rows = c.execute("SELECT DISTINCT topic FROM words").fetchall()
     topics = [r["topic"] for r in rows] if rows else ["General"]
     
-    # Initialize empty selection for this step
+    # SAVE TO CACHE
+    context.user_data["cached_topics"] = topics 
+
+    # Initialize empty selection
     context.user_data["temp_topics"] = []
     
     # Build Checkbox Keyboard
     kb = build_multi_select_keyboard(topics, [], "topic_", cols=2)
     
-    # We use context.bot.send_message because we might come from a callback
+    # Send Message
     chat_id = update.effective_chat.id
     await context.bot.send_message(
         chat_id,
@@ -933,9 +936,14 @@ async def daily_topic_handler(update, context):
     await query.answer()
     data = query.data
 
-    # 1. Fetch available topics to rebuild keyboard
-    with db() as c: rows = c.execute("SELECT DISTINCT topic FROM words").fetchall()
-    all_topics = [r["topic"] for r in rows] if rows else ["General"]
+    # 1. Use Cached Topics (Instant, No Database Lag)
+    all_topics = context.user_data.get("cached_topics", ["General"])
+    
+    # Safety fallback if cache is lost (e.g. bot restart)
+    if not all_topics and "cached_topics" not in context.user_data:
+         with db() as c: rows = c.execute("SELECT DISTINCT topic FROM words").fetchall()
+         all_topics = [r["topic"] for r in rows] if rows else ["General"]
+         context.user_data["cached_topics"] = all_topics
 
     current_selected = context.user_data.get("temp_topics", [])
 
@@ -1379,6 +1387,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
