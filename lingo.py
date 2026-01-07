@@ -630,24 +630,6 @@ async def main_menu_handler(update, context):
     return ConversationHandler.END
 
 
-    # --- HANDLE OTHER SEARCH TYPES ---
-    elif stype == "By Level": 
-        sql = "SELECT * FROM words WHERE level = ?"
-        params = (text,)
-    elif stype == "By Topic": 
-        sql = "SELECT * FROM words WHERE topic = ?"
-        params = (text,)
-    
-    with db() as c: rows = c.execute(sql, params).fetchall()
-    
-    if rows:
-        msg = "\n".join(f"{r['word']} ({r['level']})" for r in rows[:40])
-        await update.message.reply_text(f"🔍 *Results:*\n{msg}", parse_mode="Markdown")
-    else:
-        await update.message.reply_text("No results.")
-        
-    return await common_cancel(update, context)
-
 async def search_add_redirect(update, context):
     text = update.message.text
     word = context.user_data.get("add_preload")
@@ -1047,4 +1029,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
