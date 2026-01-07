@@ -525,22 +525,30 @@ async def main_menu_handler(update, context):
         else:
             await send_word(update.message, word, is_admin)
         return ConversationHandler.END
+    
     if text == "➕ Add Word":
         await update.message.reply_text("Add Method:", reply_markup=add_word_choice_keyboard())
         return ADD_CHOICE
+    
     if text == "⏰ Daily Words":
         with db() as c: u = c.execute("SELECT * FROM users WHERE user_id=?", (uid,)).fetchone()
         status_msg = "❌ *Disabled*"
         kb_opts = [["🏠 Cancel"]]
         
         if u and u["daily_enabled"]: 
-            # Get topic, default to "All Sources" if None
+            # Get values, default to "Any" or "All Sources" if empty
             topic_display = u['daily_topic'] if u['daily_topic'] else "🌍 All Sources"
+            level_display = u['daily_level'] if u['daily_level'] else "Any"
+            pos_display = u['daily_pos'] if u['daily_pos'] else "Any"
             
             status_msg = (
                 f"✅ *Active*\n"
-                f"📅 {u['daily_count']} words at {u['daily_time']}\n"
-                f"📚 Book: {topic_display}"
+                f"________________________\n"
+                f"📅 Count: `{u['daily_count']}`\n"
+                f"⏰ Time: `{u['daily_time']}`\n"
+                f"📊 Level: `{level_display}`\n"
+                f"🏷 POS: `{pos_display}`\n"
+                f"📚 Topic: `{topic_display}`"
             )
             kb_opts = [["🔕 Deactivate"], ["🏠 Cancel"]]
 
@@ -550,6 +558,7 @@ async def main_menu_handler(update, context):
             parse_mode="Markdown"
         )
         return DAILY_COUNT
+        
     if text == "📚 List Words":
         # 1. Fetch Topics
         with db() as c: rows = c.execute("SELECT DISTINCT topic FROM words").fetchall()
@@ -1419,6 +1428,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
