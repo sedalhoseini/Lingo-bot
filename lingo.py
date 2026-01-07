@@ -846,7 +846,7 @@ async def daily_time_handler(update, context):
         valid_time = datetime.strptime(text, "%H:%M")
         formatted_time = valid_time.strftime("%H:%M")
     except:
-        await update.message.reply_text("⚠️ Invalid Time. Format: HH:MM (e.g. 08:30)", parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Invalid Time. Format: HH:MM (e.g. 08:30 or 14:00)", parse_mode="Markdown")
         return DAILY_TIME
 
     context.user_data["daily_time"] = formatted_time
@@ -889,7 +889,7 @@ async def daily_level_handler(update, context):
         await query.delete_message()
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="⏰ **Time?** (e.g. 08:30)",
+            text="⏰ **Time?** (e.g. 08:30 or 14:00)",
             reply_markup=ReplyKeyboardMarkup([["🔙 Back", "🏠 Cancel"]], resize_keyboard=True),
             parse_mode="Markdown"
         )
@@ -1489,6 +1489,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
