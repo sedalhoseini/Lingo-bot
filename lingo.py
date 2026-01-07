@@ -767,12 +767,9 @@ async def report_handler(update, context):
     await update.message.reply_text("✅ Report sent to admin.")
     return await common_cancel(update, context)
 
-def build_multi_select_keyboard(options, selected, callback_prefix, cols=3):
+def build_multi_select_keyboard(options, selected, callback_prefix, cols=3, has_back=True):
     """
-    Generates an inline keyboard with checkmarks.
-    options: List of strings (e.g., ['A1', 'A2'])
-    selected: List of currently selected strings
-    callback_prefix: Prefix for button data (e.g., "lvl_")
+    Generates an inline keyboard with checkmarks AND a Back button.
     """
     buttons = []
     row = []
@@ -788,10 +785,14 @@ def build_multi_select_keyboard(options, selected, callback_prefix, cols=3):
     if row: buttons.append(row)
     
     # Control Buttons
-    buttons.append([
-        InlineKeyboardButton("🗑 Clear / Any", callback_data=f"{callback_prefix}any"),
-        InlineKeyboardButton("Done ➡️", callback_data=f"{callback_prefix}done")
-    ])
+    controls = []
+    if has_back:
+        controls.append(InlineKeyboardButton("🔙 Back", callback_data=f"{callback_prefix}back"))
+    
+    controls.append(InlineKeyboardButton("🗑 Clear", callback_data=f"{callback_prefix}any"))
+    controls.append(InlineKeyboardButton("Done ➡️", callback_data=f"{callback_prefix}done"))
+    
+    buttons.append(controls)
     return InlineKeyboardMarkup(buttons)
 
 # --- Daily ---
@@ -803,39 +804,70 @@ async def daily_count_handler(update, context):
     if text == "🔕 Deactivate":
         uid = update.effective_user.id
         with db() as c: c.execute("UPDATE users SET daily_enabled=0 WHERE user_id=?", (uid,))
-        await update.message.reply_text("✅ Daily words deactivated.")
-        return await common_cancel(update, context)
+        await update.message.reply_text("✅ Daily words deactivated.", reply_markup=main_keyboard_bottom())
+        return ConversationHandler.END
 
     try:
         count = int(text)
         if not (1 <= count <= 50): raise ValueError
         context.user_data["daily_count"] = count
-        await update.message.reply_text("Time (HH:MM)?")
+        
+        # ASK FOR TIME (Text Input)
+        # We provide a "Back" button in the ReplyKeyboard for the *next* step
+        await update.message.reply_text(
+            "⏰ **Time?** (e.g. 08:30 or 14:00)", 
+            reply_markup=ReplyKeyboardMarkup([["🔙 Back", "🏠 Cancel"]], resize_keyboard=True),
+            parse_mode="Markdown"
+        )
         return DAILY_TIME
-    except: await update.message.reply_text("Invalid. 1-50:"); return DAILY_COUNT
+    except: 
+        await update.message.reply_text("Invalid number. Please enter 1-50:")
+        return DAILY_COUNT
 
-# Step 2 — Time -> Triggers Level Selection
+# Place this AFTER daily_count_handler and BEFORE daily_level_handler
+
 async def daily_time_handler(update, context):
-    if update.message.text == "🏠 Cancel": return await common_cancel(update, context)
+    text = update.message.text.strip()
     
-    time_text = update.message.text.strip()
+    # 1. Cancel Check
+    if text == "🏠 Cancel": 
+        return await common_cancel(update, context)
+    
+    # 2. Back Button Logic (Returns to Count)
+    if text == "🔙 Back":
+        await update.message.reply_text(
+            "🔙 **Back to Count**\n\nHow many words per day? (1-50):", 
+            reply_markup=ReplyKeyboardMarkup([["🔕 Deactivate"], ["🏠 Cancel"]], resize_keyboard=True),
+            parse_mode="Markdown"
+        )
+        return DAILY_COUNT
+
+    # 3. Time Validation (Accepts 8:30 and 08:30)
     try:
-        datetime.strptime(time_text, "%H:%M")
+        # datetime.strptime handles "8:30" correctly with %H:%M
+        valid_time = datetime.strptime(text, "%H:%M")
+        formatted_time = valid_time.strftime("%H:%M") # Standardize to "08:30"
     except:
-        await update.message.reply_text("Invalid Time. Use HH:MM format.")
+        await update.message.reply_text("⚠️ Invalid Time. Please use format **HH:MM** (e.g. `08:30` or `22:00`).", parse_mode="Markdown")
         return DAILY_TIME
 
-    context.user_data["daily_time"] = time_text
+    # 4. Save and Move to Level
+    context.user_data["daily_time"] = formatted_time
     context.user_data["temp_levels"] = [] # Init empty selection
 
-    # Options available
+    # Options for next step
     opts = ["A1", "A2", "B1", "B2", "C1", "C2"]
     kb = build_multi_select_keyboard(opts, [], "lvl_")
     
+    # Remove the Text Keyboard (Back/Cancel) and send the Inline Keyboard (Buttons)
     await update.message.reply_text(
-        "📊 **Select Level(s):**\nChoose one or more. Click 'Done' when finished.",
-        reply_markup=kb, parse_mode="Markdown"
+        f"⏰ Time set to `{formatted_time}`\n\n📊 **Select Level(s):**\nChoose one or more. Click 'Done' when finished.",
+        reply_markup=ReplyKeyboardRemove(),
+        parse_mode="Markdown"
     )
+    # Send the buttons in a separate message to ensure they appear
+    await update.message.reply_text("👇 Options:", reply_markup=kb)
+    
     return DAILY_LEVEL
 
 # Step 3 — Level (Callback Handler)
@@ -847,15 +879,24 @@ async def daily_level_handler(update, context):
     current_selected = context.user_data.get("temp_levels", [])
     opts = ["A1", "A2", "B1", "B2", "C1", "C2"]
 
+    # === BACK LOGIC (Goes back to Step 2: Time) ===
+    if "back" in data:
+        await query.delete_message()
+        # Re-ask for Time via Text
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="⏰ **Time?** (e.g. 08:30 or 14:00)",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Back", "🏠 Cancel"]], resize_keyboard=True),
+            parse_mode="Markdown"
+        )
+        return DAILY_TIME
+
     if "toggle_" in data:
         val = data.split("toggle_")[1]
-        if val in current_selected:
-            current_selected.remove(val)
-        else:
-            current_selected.append(val)
+        if val in current_selected: current_selected.remove(val)
+        else: current_selected.append(val)
         context.user_data["temp_levels"] = current_selected
         
-        # Refresh Keyboard
         kb = build_multi_select_keyboard(opts, current_selected, "lvl_")
         await query.edit_message_reply_markup(kb)
         return DAILY_LEVEL
@@ -867,7 +908,6 @@ async def daily_level_handler(update, context):
         return DAILY_LEVEL
 
     elif "done" in data:
-        # Save Final Selection
         final_list = context.user_data.get("temp_levels", [])
         context.user_data["daily_level"] = ",".join(final_list) if final_list else "Any"
 
@@ -891,12 +931,24 @@ async def daily_pos_handler(update, context):
     current_selected = context.user_data.get("temp_pos", [])
     opts = ["noun", "verb", "adjective", "adverb", "idiom", "phrasal verb"]
 
+    # === BACK LOGIC (Goes back to Step 3: Level) ===
+    if "back" in data:
+        # Restore previous selection
+        prev_selected = context.user_data.get("temp_levels", [])
+        lvl_opts = ["A1", "A2", "B1", "B2", "C1", "C2"]
+        kb = build_multi_select_keyboard(lvl_opts, prev_selected, "lvl_")
+        
+        time_val = context.user_data.get("daily_time", "Unknown")
+        await query.edit_message_text(
+            f"⏰ Time set to `{time_val}`\n\n📊 **Select Level(s):**",
+            reply_markup=kb, parse_mode="Markdown"
+        )
+        return DAILY_LEVEL
+
     if "toggle_" in data:
         val = data.split("toggle_")[1]
-        if val in current_selected:
-            current_selected.remove(val)
-        else:
-            current_selected.append(val)
+        if val in current_selected: current_selected.remove(val)
+        else: current_selected.append(val)
         context.user_data["temp_pos"] = current_selected
         
         kb = build_multi_select_keyboard(opts, current_selected, "pos_")
@@ -910,11 +962,9 @@ async def daily_pos_handler(update, context):
         return DAILY_POS
 
     elif "done" in data:
-        # Save Final Selection
         final_list = context.user_data.get("temp_pos", [])
         context.user_data["daily_pos"] = ",".join(final_list) if final_list else "Any"
         
-        # TRANSITION TO TOPIC (Smooth: Edit the existing message)
         return await daily_topic_entry(update, context, edit_mode=True)
 
 # Helper to enter topic state
@@ -954,7 +1004,6 @@ async def daily_topic_handler(update, context):
     await query.answer()
     data = query.data
 
-    # 1. Use Cached Topics
     all_topics = context.user_data.get("cached_topics", ["General"])
     # Fallback if cache empty
     if not all_topics:
@@ -964,27 +1013,30 @@ async def daily_topic_handler(update, context):
 
     current_selected = context.user_data.get("temp_topics", [])
 
-    # === TOGGLE LOGIC ===
+    # === BACK LOGIC (Goes back to Step 4: POS) ===
+    if "back" in data:
+        prev_selected = context.user_data.get("temp_pos", [])
+        pos_opts = ["noun", "verb", "adjective", "adverb", "idiom", "phrasal verb"]
+        kb = build_multi_select_keyboard(pos_opts, prev_selected, "pos_")
+        
+        lvl_val = context.user_data.get("daily_level", "Any")
+        await query.edit_message_text(
+            f"✅ Level: {lvl_val}\n\n🏷 **Select Part(s) of Speech:**",
+            reply_markup=kb, parse_mode="Markdown"
+        )
+        return DAILY_POS
+
     if "toggle_" in data:
         val = data.split("toggle_")[1]
-        
-        # Toggle selection
-        if val in current_selected:
-            current_selected.remove(val)
-        else:
-            current_selected.append(val)
-            
+        if val in current_selected: current_selected.remove(val)
+        else: current_selected.append(val)
         context.user_data["temp_topics"] = current_selected
         
-        # Rebuild keyboard with new checkmarks
         kb = build_multi_select_keyboard(all_topics, current_selected, "topic_", cols=2)
-        
-        # Smooth update (Try/Except handles "Message not modified" error if user spams click)
         try: await query.edit_message_reply_markup(kb)
         except: pass
         return DAILY_TOPIC
 
-    # === CLEAR / ANY LOGIC ===
     elif "any" in data:
         context.user_data["temp_topics"] = []
         kb = build_multi_select_keyboard(all_topics, [], "topic_", cols=2)
@@ -992,13 +1044,11 @@ async def daily_topic_handler(update, context):
         except: pass
         return DAILY_TOPIC
 
-    # === DONE LOGIC ===
     elif "done" in data:
         # Save Final Selection
         final_list = context.user_data.get("temp_topics", [])
         final_topic_str = ",".join(final_list) if final_list else "Any"
         
-        # DB SAVE
         uid = update.effective_user.id
         d = context.user_data
         
@@ -1011,7 +1061,6 @@ async def daily_topic_handler(update, context):
                 daily_level=excluded.daily_level, daily_pos=excluded.daily_pos, daily_topic=excluded.daily_topic
             """, (uid, d.get("daily_count"), d.get("daily_time"), d.get("daily_level"), d.get("daily_pos"), final_topic_str))
 
-        # 1. Edit the inline message to show "Saved" state
         summary_text = (
             f"✅ **Daily Words Activated!**\n"
             f"________________________\n"
@@ -1024,7 +1073,6 @@ async def daily_topic_handler(update, context):
         try: await query.edit_message_text(summary_text, parse_mode="Markdown")
         except: pass
 
-        # 2. SEND NEW MESSAGE with Main Menu (Auto-Exit)
         is_admin = uid in ADMIN_IDS
         await context.bot.send_message(
             chat_id=uid,
@@ -1428,18 +1476,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
