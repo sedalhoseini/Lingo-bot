@@ -20,7 +20,9 @@ VERSION_DATE = "2026-01-07"
 CHANGELOG = """
 • Daily Words got updated:
 - No repeated words anymore
-- Improved interface
+- More options included
+- Improved memory
+- Improved UI
 - bugs fixed
 """
 
@@ -825,7 +827,7 @@ async def daily_count_handler(update, context):
     text = update.message.text
     if text == "🏠 Cancel": return await common_cancel(update, context)
     
-    # 8. Deactivate Button Logic
+    # Deactivate Button Logic
     if text == "🔕 Deactivate":
         uid = update.effective_user.id
         with db() as c: c.execute("UPDATE users SET daily_enabled=0 WHERE user_id=?", (uid,))
@@ -837,11 +839,12 @@ async def daily_count_handler(update, context):
         if not (1 <= count <= 50): raise ValueError
         context.user_data["daily_count"] = count
         
-        # ASK FOR TIME (Text Input)
-        # We provide a "Back" button in the ReplyKeyboard for the *next* step
+        # ASK FOR TIME (Multi-Time Instructions)
         await update.message.reply_text(
-            "⏰ **Time?** (e.g. 08:30 or 14:00)", 
-            reply_markup=ReplyKeyboardMarkup([["🔙 Back", "🏠 Cancel"]], resize_keyboard=True),
+            "⏰ **At what time(s)?**\n\n"
+            "Type one or more times (24h format), separated by commas.\n"
+            "Example: `08:30` or `09:00, 21:30`", 
+            reply_markup=get_time_keyboard(),
             parse_mode="Markdown"
         )
         return DAILY_TIME
@@ -849,7 +852,6 @@ async def daily_count_handler(update, context):
         await update.message.reply_text("Invalid number. Please enter 1-50:")
         return DAILY_COUNT
 
-# Place this AFTER daily_count_handler and BEFORE daily_level_handler
 
 async def daily_time_handler(update, context):
     text = update.message.text.strip()
@@ -866,12 +868,25 @@ async def daily_time_handler(update, context):
         )
         return DAILY_COUNT
 
-    # Time Validation
+    # MULTI-TIME VALIDATION
     try:
-        valid_time = datetime.strptime(text, "%H:%M")
-        formatted_time = valid_time.strftime("%H:%M")
+        # Split by comma and clean up spaces
+        raw_times = [t.strip() for t in text.split(',')]
+        valid_times = []
+        
+        for t in raw_times:
+            if not t: continue
+            # Parse and re-format to ensure HH:MM (e.g. 8:30 -> 08:30)
+            valid_time = datetime.strptime(t, "%H:%M")
+            valid_times.append(valid_time.strftime("%H:%M"))
+        
+        if not valid_times: raise ValueError
+        
+        # Sort and join back into a string like "08:30,20:00"
+        formatted_time = ",".join(sorted(list(set(valid_times))))
+        
     except:
-        await update.message.reply_text("⚠️ Invalid Time. Format: HH:MM (e.g. 08:30 or 14:00)", parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Invalid Format. Use `HH:MM` or `08:00, 20:00`.", parse_mode="Markdown")
         return DAILY_TIME
 
     context.user_data["daily_time"] = formatted_time
@@ -880,13 +895,12 @@ async def daily_time_handler(update, context):
     opts = ["A1", "A2", "B1", "B2", "C1", "C2"]
     kb = build_multi_select_keyboard(opts, [], "lvl_")
     
-    # 1. Phantom Clear: Send a temp message to remove the keyboard, then delete it.
-    # This prevents the "Processing..." text from sticking around.
+    # 1. Phantom Clear (Remove old keyboard)
     temp_msg = await update.message.reply_text("⏳", reply_markup=ReplyKeyboardRemove())
     try: await temp_msg.delete()
-    except: pass # Ignore if delete fails
+    except: pass 
     
-    # 2. Send the Fresh Status Message with Buttons
+    # 2. Send Status
     await update.message.reply_text(
         f"✅ Time: `{formatted_time}`\n\n"
         f"📊 **Select Level(s):**\n"
@@ -1291,18 +1305,18 @@ async def send_daily_scheduler(context):
     tehran = pytz.timezone("Asia/Tehran")
     now_str = datetime.now(tehran).strftime("%H:%M")
     
-    # 1. DUPLICATE CHECK: If we already sent words for "09:30", skip this run.
+    # 1. DUPLICATE CHECK
     last_sent = context.bot_data.get("last_sent_minute")
     if last_sent == now_str:
         return 
-    
-    # Save this minute as processed
     context.bot_data["last_sent_minute"] = now_str
 
     # 2. Run User Query in Background Thread
+    # We use 'LIKE' to match the current time inside the comma-separated string
+    # e.g., if now is 08:00, it matches users with "08:00" or "08:00,20:00"
     def get_scheduled_users():
         with db() as c: 
-            return c.execute("SELECT * FROM users WHERE daily_enabled=1 AND daily_time=?", (now_str,)).fetchall()
+            return c.execute("SELECT * FROM users WHERE daily_enabled=1 AND daily_time LIKE ?", (f"%{now_str}%",)).fetchall()
 
     users = await asyncio.to_thread(get_scheduled_users)
     
@@ -1521,6 +1535,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
