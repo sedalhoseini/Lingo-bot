@@ -553,7 +553,7 @@ async def main_menu_handler(update, context):
             kb_opts = [["🔕 Deactivate"], ["🏠 Cancel"]]
 
         await update.message.reply_text(
-            f"{status_msg}\n\nTo change, enter count (1-50 words per day):", 
+            f"{status_msg}\n\nTo change, enter words per day (1-50):", 
             reply_markup=ReplyKeyboardMarkup(kb_opts, resize_keyboard=True), 
             parse_mode="Markdown"
         )
@@ -1428,6 +1428,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
