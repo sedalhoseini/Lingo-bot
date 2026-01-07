@@ -516,11 +516,11 @@ async def main_menu_handler(update, context):
     context.user_data["is_admin_flag"] = is_admin
 
     if text == "🎯 Get Word":
-        # We use pick_word_for_user so it checks sent_words table (No Repeats)
-        word = pick_word_for_user(uid)
+        # Run DB query in background to avoid blocking
+        word = await asyncio.to_thread(pick_word_for_user, uid)
+        
         if not word:
             await update.message.reply_text("🎉 You have seen all available words! (Resetting cycle...)")
-            # Optional: You could auto-clear sent_words here if you want an endless loop
         else:
             await send_word(update.message, word, is_admin)
         return ConversationHandler.END
@@ -1191,19 +1191,22 @@ async def send_daily_scheduler(context):
     tehran = pytz.timezone("Asia/Tehran")
     now_str = datetime.now(tehran).strftime("%H:%M")
     
-    # 1. Get users scheduled for NOW
-    with db() as c: 
-        users = c.execute("SELECT * FROM users WHERE daily_enabled=1 AND daily_time=?", (now_str,)).fetchall()
+    # 1. Run User Query in Background Thread (Non-blocking)
+    def get_scheduled_users():
+        with db() as c: 
+            return c.execute("SELECT * FROM users WHERE daily_enabled=1 AND daily_time=?", (now_str,)).fetchall()
+
+    users = await asyncio.to_thread(get_scheduled_users)
     
     for u in users:
         user_id = u["user_id"]
         
         for _ in range(u["daily_count"]):
-            # 2. Use the Smart Picker (Avoids Repeats)
-            word_row = pick_word_for_user(user_id)
+            # 2. Run Word Picker in Background Thread (Non-blocking)
+            # pick_word_for_user involves "ORDER BY RANDOM()" which can be slow
+            word_row = await asyncio.to_thread(pick_word_for_user, user_id)
             
             if word_row:
-                # 3. Format the text manually (since we can't use the reply helper)
                 text = (
                     f"📖 *{word_row['word']}*\n"
                     f"🏷 {word_row['level']} | {word_row['topic']}\n"
@@ -1213,7 +1216,6 @@ async def send_daily_scheduler(context):
                     f"📚 _Source: {word_row['source']}_"
                 )
                 try:
-                    # 4. Send directly to the User ID
                     await context.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown")
                 except: 
                     pass
@@ -1412,6 +1414,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
