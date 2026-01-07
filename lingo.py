@@ -479,10 +479,12 @@ def pick_word_for_user(user_id):
             if or_clauses:
                 query += f" AND ({' OR '.join(or_clauses)})"
 
-        # FILTER: TOPIC
-        if u and u["daily_topic"] and u["daily_topic"] != "🌍 All Sources":
-            query += " AND w.topic = ?"
-            params.append(u["daily_topic"])
+        # FILTER: TOPIC (Multi-Select Support)
+        if u and u["daily_topic"] and u["daily_topic"] != "🌍 All Sources" and u["daily_topic"] != "Any":
+            topics = u["daily_topic"].split(",")
+            placeholders = ",".join("?" * len(topics))
+            query += f" AND w.topic IN ({placeholders})"
+            params.extend(topics)
 
         query += " ORDER BY RANDOM() LIMIT 1"
 
@@ -903,41 +905,86 @@ async def daily_pos_handler(update, context):
         return await daily_topic_entry(update, context)
 
 # Helper to enter topic state
+# Helper to enter topic state
 async def daily_topic_entry(update, context):
     # Fetch Topics
     with db() as c: rows = c.execute("SELECT DISTINCT topic FROM words").fetchall()
     topics = [r["topic"] for r in rows] if rows else ["General"]
     
-    buttons = [["🌍 All Sources"]] + [topics[i:i + 2] for i in range(0, len(topics), 2)] + [["🏠 Cancel"]]
+    # Initialize empty selection for this step
+    context.user_data["temp_topics"] = []
+    
+    # Build Checkbox Keyboard
+    kb = build_multi_select_keyboard(topics, [], "topic_", cols=2)
     
     # We use context.bot.send_message because we might come from a callback
     chat_id = update.effective_chat.id
     await context.bot.send_message(
         chat_id,
-        f"✅ POS: {context.user_data['daily_pos']}\n\n📚 **Which Book/Topic?**",
-        reply_markup=ReplyKeyboardMarkup(buttons, resize_keyboard=True),
+        f"✅ POS: {context.user_data['daily_pos']}\n\n📚 **Select Book(s)/Topic(s):**\nChoose one or more, then click 'Done'.",
+        reply_markup=kb,
         parse_mode="Markdown"
     )
     return DAILY_TOPIC
     
+# Step 5 — Topic (Callback Handler) + SAVE
 async def daily_topic_handler(update, context):
-    if update.message.text == "🏠 Cancel": return await common_cancel(update, context)
-    context.user_data["daily_topic"] = update.message.text
-    
-    d = context.user_data
-    uid = update.effective_user.id
-    
-    with db() as c:
-        c.execute("""
-            INSERT INTO users (user_id, daily_enabled, daily_count, daily_time, daily_level, daily_pos, daily_topic)
-            VALUES (?, 1, ?, ?, ?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET 
-            daily_enabled=1, daily_count=excluded.daily_count, daily_time=excluded.daily_time, 
-            daily_level=excluded.daily_level, daily_pos=excluded.daily_pos, daily_topic=excluded.daily_topic
-        """, (uid, d["daily_count"], d["daily_time"], d["daily_level"], d["daily_pos"], d["daily_topic"]))
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    # 1. Fetch available topics to rebuild keyboard
+    with db() as c: rows = c.execute("SELECT DISTINCT topic FROM words").fetchall()
+    all_topics = [r["topic"] for r in rows] if rows else ["General"]
+
+    current_selected = context.user_data.get("temp_topics", [])
+
+    if "toggle_" in data:
+        val = data.split("toggle_")[1]
+        if val in current_selected:
+            current_selected.remove(val)
+        else:
+            current_selected.append(val)
+        context.user_data["temp_topics"] = current_selected
         
-    await update.message.reply_text(f"✅ Daily Updated!\nBook: {d['daily_topic']}")
-    return await common_cancel(update, context)
+        kb = build_multi_select_keyboard(all_topics, current_selected, "topic_", cols=2)
+        await query.edit_message_reply_markup(kb)
+        return DAILY_TOPIC
+
+    elif "any" in data:
+        context.user_data["temp_topics"] = []
+        kb = build_multi_select_keyboard(all_topics, [], "topic_", cols=2)
+        await query.edit_message_reply_markup(kb)
+        return DAILY_TOPIC
+
+    elif "done" in data:
+        # Save Final Selection
+        final_list = context.user_data.get("temp_topics", [])
+        final_topic_str = ",".join(final_list) if final_list else "Any"
+        
+        # === FINAL SAVE TO DB ===
+        uid = update.effective_user.id
+        d = context.user_data
+        
+        with db() as c:
+            c.execute("""
+                INSERT INTO users (user_id, daily_enabled, daily_count, daily_time, daily_level, daily_pos, daily_topic)
+                VALUES (?, 1, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET 
+                daily_enabled=1, daily_count=excluded.daily_count, daily_time=excluded.daily_time, 
+                daily_level=excluded.daily_level, daily_pos=excluded.daily_pos, daily_topic=excluded.daily_topic
+            """, (uid, d["daily_count"], d["daily_time"], d["daily_level"], d["daily_pos"], final_topic_str))
+
+        await query.edit_message_text(
+            f"✅ **Daily Words Active!**\n\n"
+            f"📅 Count: {d['daily_count']}\n"
+            f"⏰ Time: {d['daily_time']}\n"
+            f"📊 Level: {d['daily_level']}\n"
+            f"🏷 POS: {d['daily_pos']}\n"
+            f"📚 Topic: {final_topic_str}",
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
 
 # --- Add Word ---
 async def add_choice(update, context):
@@ -1293,7 +1340,7 @@ def main():
             DAILY_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, daily_time_handler)],
             DAILY_LEVEL: [CallbackQueryHandler(daily_level_handler)],
             DAILY_POS: [CallbackQueryHandler(daily_pos_handler)],
-            DAILY_TOPIC: [MessageHandler(filters.TEXT & ~filters.COMMAND, daily_topic_handler)],
+            DAILY_TOPIC: [CallbackQueryHandler(daily_topic_handler)],
 
             # LIST LOGIC
             LIST_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, list_choice_handler)],
@@ -1332,6 +1379,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
